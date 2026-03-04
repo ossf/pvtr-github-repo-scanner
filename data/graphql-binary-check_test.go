@@ -9,6 +9,12 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+// Git tree entry file modes (decimal representation of octal values)
+var (
+	modeExecutable    = 33261 // 100755 in octal — file with execute permission
+	modeNonExecutable = 33188 // 100644 in octal — file without execute permission
+)
+
 func boolPtr(b bool) *bool {
 	return &b
 }
@@ -42,29 +48,38 @@ func TestCheckTreeForBinaries(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "binary files are correctly detected",
+			name: "executable binary files are correctly detected",
 			tree: buildTree([]testEntry{
-				{name: "app.jar", isBinary: boolPtr(true)},
+				{name: "app.jar", isBinary: boolPtr(true), mode: modeExecutable},
 				{name: "README.md", isBinary: boolPtr(false)},
 			}),
 			expected: []string{"app.jar"},
 		},
 		{
-			name: "multiple binary files detected",
+			name: "multiple executable binary files detected",
 			tree: buildTree([]testEntry{
-				{name: "app.exe", isBinary: boolPtr(true)},
-				{name: "lib.dll", isBinary: boolPtr(true)},
+				{name: "app.exe", isBinary: boolPtr(true), mode: modeExecutable},
+				{name: "lib.dll", isBinary: boolPtr(true), mode: modeExecutable},
 				{name: "main.go", isBinary: boolPtr(false)},
 			}),
 			expected: []string{"app.exe", "lib.dll"},
 		},
 		{
-			name: "nested binary files detected",
+			name: "nested executable binary files detected",
 			tree: buildTreeWithNested(
 				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
-				[]testEntry{{name: "wrapper.jar", isBinary: boolPtr(true)}},
+				[]testEntry{{name: "wrapper.jar", isBinary: boolPtr(true), mode: modeExecutable}},
 			),
 			expected: []string{"wrapper.jar"},
+		},
+		{
+			name: "non-executable binary files not flagged",
+			tree: buildTree([]testEntry{
+				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "diagram.pdf", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "README.md", isBinary: boolPtr(false)},
+			}),
+			expected: nil,
 		},
 		{
 			name: "extensionless text files not flagged",
@@ -107,19 +122,30 @@ func TestCheckTreeForBinaries(t *testing.T) {
 func TestBinaryCheckerIsBinary(t *testing.T) {
 	bc := &binaryChecker{logger: hclog.NewNullLogger()}
 
-	t.Run("isBinary true returns true", func(t *testing.T) {
-		result, err := bc.check(boolPtr(true), false, "any-file")
+	t.Run("isBinary true but non-executable mode returns false", func(t *testing.T) {
+		result, err := bc.check(boolPtr(true), false, "image.png", modeNonExecutable)
+		if err != nil {
+			t.Errorf("check() error = %v", err)
+			return
+		}
+		if result {
+			t.Error("expected non-executable binary (e.g. PNG) to return false")
+		}
+	})
+
+	t.Run("isBinary true with executable mode returns true", func(t *testing.T) {
+		result, err := bc.check(boolPtr(true), false, "app.exe", modeExecutable)
 		if err != nil {
 			t.Errorf("check() error = %v", err)
 			return
 		}
 		if !result {
-			t.Error("expected isBinary=true to return true")
+			t.Error("expected executable binary to return true")
 		}
 	})
 
 	t.Run("isBinary false returns false", func(t *testing.T) {
-		result, err := bc.check(boolPtr(false), false, "any-file")
+		result, err := bc.check(boolPtr(false), false, "any-file", modeNonExecutable)
 		if err != nil {
 			t.Errorf("check() error = %v", err)
 			return
@@ -130,7 +156,7 @@ func TestBinaryCheckerIsBinary(t *testing.T) {
 	})
 
 	t.Run("isBinary false takes precedence over truncated", func(t *testing.T) {
-		result, err := bc.check(boolPtr(false), true, "any-file")
+		result, err := bc.check(boolPtr(false), true, "any-file", modeNonExecutable)
 		if err != nil {
 			t.Errorf("check() error = %v", err)
 			return
@@ -141,7 +167,7 @@ func TestBinaryCheckerIsBinary(t *testing.T) {
 	})
 
 	t.Run("nil isBinary and not truncated returns false", func(t *testing.T) {
-		result, err := bc.check(nil, false, "any-file")
+		result, err := bc.check(nil, false, "any-file", modeNonExecutable)
 		if err != nil {
 			t.Errorf("check() error = %v", err)
 			return
@@ -397,6 +423,7 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 type testEntry struct {
 	name     string
 	isBinary *bool
+	mode     int
 }
 
 func buildTree(entries []testEntry) *GraphqlRepoTree {
@@ -407,6 +434,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 			Name   string
 			Type   string
 			Path   string
+			Mode   int
 			Object *struct {
 				Blob struct {
 					IsBinary    *bool
@@ -417,6 +445,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 						Name   string
 						Type   string
 						Path   string
+						Mode   int
 						Object *struct {
 							Blob struct {
 								IsBinary    *bool
@@ -427,6 +456,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 									Name   string
 									Type   string
 									Path   string
+									Mode   int
 									Object *struct {
 										Blob struct {
 											IsBinary    *bool
@@ -443,6 +473,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 			Name: e.name,
 			Type: "blob",
 			Path: e.name,
+			Mode: e.mode,
 		}
 		entry.Object = &struct {
 			Blob struct {
@@ -454,6 +485,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 					Name   string
 					Type   string
 					Path   string
+					Mode   int
 					Object *struct {
 						Blob struct {
 							IsBinary    *bool
@@ -464,6 +496,7 @@ func buildTree(entries []testEntry) *GraphqlRepoTree {
 								Name   string
 								Type   string
 								Path   string
+								Mode   int
 								Object *struct {
 									Blob struct {
 										IsBinary    *bool
@@ -491,6 +524,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 		Name   string
 		Type   string
 		Path   string
+		Mode   int
 		Object *struct {
 			Blob struct {
 				IsBinary    *bool
@@ -501,6 +535,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 					Name   string
 					Type   string
 					Path   string
+					Mode   int
 					Object *struct {
 						Blob struct {
 							IsBinary    *bool
@@ -511,6 +546,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 								Name   string
 								Type   string
 								Path   string
+								Mode   int
 								Object *struct {
 									Blob struct {
 										IsBinary    *bool
@@ -539,6 +575,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 				Name   string
 				Type   string
 				Path   string
+				Mode   int
 				Object *struct {
 					Blob struct {
 						IsBinary    *bool
@@ -549,6 +586,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 							Name   string
 							Type   string
 							Path   string
+							Mode   int
 							Object *struct {
 								Blob struct {
 									IsBinary    *bool
@@ -567,6 +605,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 			Name   string
 			Type   string
 			Path   string
+			Mode   int
 			Object *struct {
 				Blob struct {
 					IsBinary    *bool
@@ -577,6 +616,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 						Name   string
 						Type   string
 						Path   string
+						Mode   int
 						Object *struct {
 							Blob struct {
 								IsBinary    *bool
@@ -590,6 +630,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 			Name: e.name,
 			Type: "blob",
 			Path: "subdir/" + e.name,
+			Mode: e.mode,
 		}
 		subEntry.Object = &struct {
 			Blob struct {
@@ -601,6 +642,7 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 					Name   string
 					Type   string
 					Path   string
+					Mode   int
 					Object *struct {
 						Blob struct {
 							IsBinary    *bool

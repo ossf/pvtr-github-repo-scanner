@@ -23,6 +23,7 @@ type GraphqlRepoTree struct {
 					Name   string
 					Type   string
 					Path   string
+					Mode   int
 					Object *struct {
 						Blob struct {
 							IsBinary    *bool
@@ -33,6 +34,7 @@ type GraphqlRepoTree struct {
 								Name   string
 								Type   string
 								Path   string
+								Mode   int
 								Object *struct {
 									Blob struct {
 										IsBinary    *bool
@@ -43,6 +45,7 @@ type GraphqlRepoTree struct {
 											Name   string
 											Type   string
 											Path   string
+											Mode   int
 											Object *struct {
 												Blob struct {
 													IsBinary    *bool
@@ -69,8 +72,16 @@ type binaryChecker struct {
 	branch     string
 }
 
-func (bc *binaryChecker) check(isBinaryPtr *bool, isTruncated bool, path string) (bool, error) {
+func (bc *binaryChecker) check(isBinaryPtr *bool, isTruncated bool, path string, mode int) (bool, error) {
 	if isBinaryPtr != nil {
+		if *isBinaryPtr && mode&0111 == 0 {
+			// File is binary but lacks any Unix execute permission bits (owner, group, other).
+			// Git only uses mode 100755 for executables, but the bitwise check is more
+			// robust against non-standard modes from other Git implementations.
+			// Non-executable binaries (e.g. PNG, PDF) are not "generated executable artifacts"
+			// per OSPS-QA-05.01 and should not be flagged.
+			return false, nil
+		}
 		return *isBinaryPtr, nil
 	}
 	// If file has a common text extension, assume it's not binary to avoid unnecessary HTTP requests
@@ -162,7 +173,7 @@ func checkTreeForBinaries(tree *GraphqlRepoTree, bc *binaryChecker) (binariesFou
 	}
 	for _, entry := range tree.Repository.Object.Tree.Entries {
 		if entry.Type == "blob" && entry.Object != nil {
-			isBinary, err := bc.check(entry.Object.Blob.IsBinary, entry.Object.Blob.IsTruncated, entry.Path)
+			isBinary, err := bc.check(entry.Object.Blob.IsBinary, entry.Object.Blob.IsTruncated, entry.Path, entry.Mode)
 			if err != nil {
 				return nil, err
 			}
@@ -173,7 +184,7 @@ func checkTreeForBinaries(tree *GraphqlRepoTree, bc *binaryChecker) (binariesFou
 		if entry.Type == "tree" && entry.Object != nil {
 			for _, subEntry := range entry.Object.Tree.Entries {
 				if subEntry.Type == "blob" && subEntry.Object != nil {
-					isBinary, err := bc.check(subEntry.Object.Blob.IsBinary, subEntry.Object.Blob.IsTruncated, subEntry.Path)
+					isBinary, err := bc.check(subEntry.Object.Blob.IsBinary, subEntry.Object.Blob.IsTruncated, subEntry.Path, subEntry.Mode)
 					if err != nil {
 						return nil, err
 					}
@@ -184,7 +195,7 @@ func checkTreeForBinaries(tree *GraphqlRepoTree, bc *binaryChecker) (binariesFou
 				if subEntry.Type == "tree" && subEntry.Object != nil {
 					for _, subSubEntry := range subEntry.Object.Tree.Entries {
 						if subSubEntry.Type == "blob" && subSubEntry.Object != nil {
-							isBinary, err := bc.check(subSubEntry.Object.Blob.IsBinary, subSubEntry.Object.Blob.IsTruncated, subSubEntry.Path)
+							isBinary, err := bc.check(subSubEntry.Object.Blob.IsBinary, subSubEntry.Object.Blob.IsTruncated, subSubEntry.Path, subSubEntry.Mode)
 							if err != nil {
 								return nil, err
 							}
