@@ -10,7 +10,7 @@ require (
 	github.com/privateerproj/privateer-sdk v1.19.0
 	github.com/rhysd/actionlint v1.7.11
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
-	golang.org/x/oauth2 v0.35.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
