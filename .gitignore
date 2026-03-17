@@ -17,3 +17,6 @@ TODO.md
 
 # ignore the local cache of claude
 .claude/
+
+# ignore ci testing folder
+tmp/
