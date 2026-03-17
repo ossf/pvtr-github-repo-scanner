@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@3b691dff6b68489c8548e1295d125c93c9c29a4e
+    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@6381f5d691a1ecf7d80126b0393a803224afd9ba
     with:
       publish: true
       release-config-name: release-drafter.yml
@@ -23,7 +23,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release-image.yaml@3b691dff6b68489c8548e1295d125c93c9c29a4e
+    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release-image.yaml@6381f5d691a1ecf7d80126b0393a803224afd9ba
     with:
       image-name: ${{ github.repository }}
       full-tag: ${{ needs.release.outputs.full-tag }}
@@ -88,7 +88,7 @@ jobs:
       matrix: ${{ fromJson(needs.goreleaser.outputs.attestation_matrix) }}
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: dist
           path: dist
