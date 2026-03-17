@@ -12,6 +12,21 @@ Currently 39 control requirements across OSPS Baselines levels 1-3 are covered, 
 
 Level 2 and Level 3 requirements are undergoing current development and may be less rigorously tested.
 
+## Local Usage
+
+To run the GitHub scanner locally, you will need the Privateer (`pvtr`) framework and the GitHub repository scanner (`pvtr-github-repo-scanner`) plugin.
+
+1. Install pvtr using one of the methods described [here](https://github.com/privateerproj/privateer/blob/main/README.md#step-2-choose-your-installation-method).
+2. Next, download the `pvtr-github-repo-scanner` plugin from the [releases](https://github.com/ossf/pvtr-github-repo-scanner/releases).
+
+The following command is an example where the `pvtr`, the `pvtr-github-repo-scanner`, and the `config.yaml` are in the same directory.
+```sh
+./pvtr run --binaries-path .
+```
+If the binaries and the config files are in different directories specify the complete path using `--binaries-path` and `--config` flags.
+
+You may have to adjust the plugin name in the config.yaml file to match them.
+
 ## Docker Usage
 
 ```sh
