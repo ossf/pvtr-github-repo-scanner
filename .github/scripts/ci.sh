@@ -94,7 +94,7 @@ services:
     plugin: github-repo
     policy:
       catalogs:
-        - osps-baseline
+        - osps-baseline-2026-02
       applicability:
         - Maturity Level 1
     vars:

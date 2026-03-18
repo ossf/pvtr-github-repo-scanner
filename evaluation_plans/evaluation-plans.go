@@ -15,7 +15,9 @@ import (
 )
 
 var (
-	// Open Source Project Security Baseline
+	// OSPS contains assessment step implementations for OSPS Baseline controls.
+	// Each catalog YAML defines which IDs are active for that version,
+	// so the SDK only runs the relevant subset.
 	OSPS = map[string][]gemara.AssessmentStep{
 		"OSPS-AC-01.01": {
 			access_control.OrgRequiresMFA,
@@ -243,3 +245,17 @@ var (
 		},
 	}
 )
+
+// AllSteps merges all step maps into a single map for registration with the SDK.
+// Assessment IDs are unique across catalogs (e.g., OSPS-* vs CRA-*), so the
+// catalog YAML naturally filters to the correct subset at evaluation time.
+// To add a new catalog family, define its step map and include it here.
+func AllSteps() map[string][]gemara.AssessmentStep {
+	merged := make(map[string][]gemara.AssessmentStep, len(OSPS))
+	for id, steps := range OSPS {
+		merged[id] = steps
+	}
+	// Add additional catalog step maps here, e.g.:
+	// for id, steps := range CRA { merged[id] = steps }
+	return merged
+}
