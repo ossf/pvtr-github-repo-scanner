@@ -33,8 +33,8 @@ You may have to adjust the plugin name in the config.yaml file to match them.
 # build the image
 docker build . -t local
 docker run \
-  --mount type=bind,source=./config.yml,destination=/.privateer/config.yml \
-  --mount type=bind,source=./evaluation_results,destination=/.privateer/bin/evaluation_results \
+  -v ./config.yml:/.privateer/config.yml \
+  -v ./evaluation_results:/.privateer/bin/evaluation_results \
   local
 ```
 
