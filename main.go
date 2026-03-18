@@ -54,9 +54,10 @@ func main() {
 	}
 
 	orchestrator.AddRequiredVars(RequiredVars)
-	err = orchestrator.AddEvaluationSuite("osps-baseline", nil, evaluation_plans.OSPS)
+
+	err = orchestrator.AddEvaluationSuiteForAllCatalogs(nil, evaluation_plans.AllSteps())
 	if err != nil {
-		fmt.Printf("Error adding evaluation suite: %v\n", err)
+		fmt.Printf("Error adding evaluation suites: %v\n", err)
 		os.Exit(1)
 	}
 

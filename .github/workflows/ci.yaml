@@ -33,4 +33,4 @@ jobs:
           ./.github/scripts/ci.sh 2>&1 | tee integration_output.txt
       - name: Verify test output
         run: |
-          grep -E 'privateer_osps-baseline.*Passed.*Warnings.*Failed.*Possible' integration_output.txt
+          grep -E 'privateer_osps-baseline-2026-02.*Passed.*Warnings.*Failed.*Possible' integration_output.txt

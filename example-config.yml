@@ -13,7 +13,7 @@ services:
     # The policy section may be set at the top level if assessing multiple services via privateer
     policy:
       catalogs:
-        - osps-baseline # currently this is the only available catalog to assess against
+        - osps-baseline-2026-02 # use osps-baseline-2025-10 for the previous version
       applicability:
         - Maturity Level 1
         # - Maturity Level 2
