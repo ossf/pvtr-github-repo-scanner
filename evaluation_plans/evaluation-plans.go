@@ -18,7 +18,7 @@ var (
 	// Open Source Project Security Baseline
 	OSPS = map[string][]gemara.AssessmentStep{
 		"OSPS-AC-01.01": {
-			access_control.OrgRequiresMFA,
+			reusable_steps.GithubBuiltIn,
 		},
 		"OSPS-AC-02.01": {
 			reusable_steps.GithubBuiltIn,
