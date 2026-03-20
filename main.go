@@ -3,10 +3,13 @@ package main
 import (
 	"embed"
 	"fmt"
+	"path"
 	"path/filepath"
 
 	"os"
 
+	"github.com/gemaraproj/go-gemara"
+	"github.com/goccy/go-yaml"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans"
 
@@ -54,10 +57,20 @@ func main() {
 	}
 
 	orchestrator.AddRequiredVars(RequiredVars)
-	err = orchestrator.AddEvaluationSuite("osps-baseline", nil, evaluation_plans.OSPS)
+
+	// Auto-discover all catalogs and register the shared OSPS steps for each.
+	// Adding a new catalog version only requires dropping a YAML file into data/catalogs/.
+	catalogIDs, err := getCatalogIDs(dataDir, files)
 	if err != nil {
-		fmt.Printf("Error adding evaluation suite: %v\n", err)
+		fmt.Printf("Error reading catalog IDs: %v\n", err)
 		os.Exit(1)
+	}
+	for _, catalogID := range catalogIDs {
+		err = orchestrator.AddEvaluationSuite(catalogID, nil, evaluation_plans.AllSteps())
+		if err != nil {
+			fmt.Printf("Error adding evaluation suite %s: %v\n", catalogID, err)
+			os.Exit(1)
+		}
 	}
 
 	runCmd := command.NewPluginCommands(
@@ -72,4 +85,32 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
+}
+
+// getCatalogIDs reads all YAML files from the embedded catalog directory
+// and returns their metadata IDs.
+func getCatalogIDs(dataDir string, files embed.FS) ([]string, error) {
+	dir, err := files.ReadDir(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read catalog directory: %w", err)
+	}
+	var ids []string
+	for _, entry := range dir {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := files.ReadFile(path.Join(dataDir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %s: %w", entry.Name(), err)
+		}
+		var catalog gemara.ControlCatalog
+		if err := yaml.Unmarshal(data, &catalog); err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %w", entry.Name(), err)
+		}
+		if catalog.Metadata.Id == "" {
+			return nil, fmt.Errorf("catalog %s has no metadata id", entry.Name())
+		}
+		ids = append(ids, catalog.Metadata.Id)
+	}
+	return ids, nil
 }
