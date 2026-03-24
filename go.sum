@@ -130,8 +130,8 @@ github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINE
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/privateerproj/privateer-sdk v1.21.0 h1:FhUAnOn1cbnGZx52WjINhpmSdoTCZYKGC2j98A3wbpk=
-github.com/privateerproj/privateer-sdk v1.21.0/go.mod h1:kU4oaUY9CyqjxDkxs/TEjKvnkSt5MvDtqIhn0ZvgG8U=
+github.com/privateerproj/privateer-sdk v1.22.0 h1:tpvw/BZctBLgGrcJLglDEeFkCmoOP8AjVuNhKE1h9Tw=
+github.com/privateerproj/privateer-sdk v1.22.0/go.mod h1:2CQvxy/Pvhx3tWVhacDQ0wF/cUVxEvbj2uYDMumoU4Y=
 github.com/rhysd/actionlint v1.7.11 h1:m+aSuCpCIClS8X02xMG4Z8s87fCHPsAtYkAoWGQZgEE=
 github.com/rhysd/actionlint v1.7.11/go.mod h1:8n50YougV9+50niD7oxgDTZ1KbN/ZnKiQ2xpLFeVhsI=
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
