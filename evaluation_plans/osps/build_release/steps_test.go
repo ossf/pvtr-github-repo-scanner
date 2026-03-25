@@ -158,3 +158,80 @@ func TestUnTrustedVarsRegex(t *testing.T) {
 	assert.Equal(t, expression.Match([]byte("github.event.issue.title")), true, "regex match failed")
 	assert.Equal(t, expression.Match([]byte("github.event.commits.arbitrary.data.message")), true, "regex match failed")
 }
+
+var branchNameBadWorkflowFile = `name: Deploy on push
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Echo branch
+        run: echo "Deploying branch ${{ github.head_ref }}"
+`
+
+var branchNameGoodWorkflowFile = `name: Deploy on push
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Echo workspace
+        run: echo "Workspace is ${{ github.workspace }}"
+`
+
+func TestCicdBranchNameSanitized(t *testing.T) {
+
+	testData := []testingData{
+		{
+			expectedResult:   false,
+			workflowFile:     branchNameBadWorkflowFile,
+			assertionMessage: "Unsanitized branch name variable not detected",
+		},
+		{
+			expectedResult:   true,
+			workflowFile:     branchNameGoodWorkflowFile,
+			assertionMessage: "Branch name variable detected where it should not have been",
+		},
+	}
+
+	for _, data := range testData {
+		workflow, _ := actionlint.Parse([]byte(data.workflowFile))
+		result, message := checkWorkflowFileForBranchNameUsage(workflow)
+		fmt.Println(message)
+		assert.Equal(t, data.expectedResult, result, data.assertionMessage)
+	}
+}
+
+func TestBranchNameVarsRegex(t *testing.T) {
+
+	expression, err := regexp.Compile(branchNameVarsRegex)
+	if err != nil {
+		t.Errorf("Error compiling regex: %v", err)
+		return
+	}
+
+	assert.True(t, expression.Match([]byte("github.head_ref")), "github.head_ref should match")
+	assert.True(t, expression.Match([]byte("github.base_ref")), "github.base_ref should match")
+	assert.True(t, expression.Match([]byte("github.ref")), "github.ref should match")
+	assert.True(t, expression.Match([]byte("github.ref_name")), "github.ref_name should match")
+	assert.True(t, expression.Match([]byte("github.event.pull_request.head.ref")), "github.event.pull_request.head.ref should match")
+	assert.True(t, expression.Match([]byte("github.event.pull_request.base.ref")), "github.event.pull_request.base.ref should match")
+	assert.False(t, expression.Match([]byte("github.workspace")), "github.workspace should not match")
+	assert.False(t, expression.Match([]byte("secrets.TOKEN")), "secrets.TOKEN should not match")
+	assert.False(t, expression.Match([]byte("github.ref_type")), "github.ref_type should not match")
+	assert.False(t, expression.Match([]byte("github.ref_protected")), "github.ref_protected should not match")
+}

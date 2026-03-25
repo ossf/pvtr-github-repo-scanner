@@ -39,7 +39,7 @@ var (
 			build_release.CicdSanitizedInputParameters,
 		},
 		"OSPS-BR-01.02": {
-			reusable_steps.NotImplemented,
+			build_release.CicdBranchNameSanitized,
 		},
 		"OSPS-BR-02.01": {
 			reusable_steps.HasMadeReleases,
