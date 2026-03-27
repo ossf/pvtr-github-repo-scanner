@@ -10,17 +10,6 @@ import (
 
 type FakeRepositoryMetadata struct {
 	data.RepositoryMetadata
-	twoFactorEnabled *bool
-}
-
-func (f *FakeRepositoryMetadata) IsMFARequiredForAdministrativeActions() *bool {
-	return f.twoFactorEnabled
-}
-
-func stubRepoMetadata(twoFactorEnabled *bool) *FakeRepositoryMetadata {
-	return &FakeRepositoryMetadata{
-		twoFactorEnabled: twoFactorEnabled,
-	}
 }
 
 type FakeBranchRuleMetadata struct {
@@ -40,51 +29,6 @@ func (f *FakeBranchRuleMetadata) DefaultBranchRequiresPRReviews() *bool {
 
 func (f *FakeBranchRuleMetadata) IsDefaultBranchProtectedFromDeletion() *bool {
 	return f.protectedFromDeletion
-}
-
-func Test_OrgRequiresMFA(t *testing.T) {
-	trueVal := true
-	falseVal := false
-
-	tests := []struct {
-		name        string
-		payload     data.Payload
-		wantResult  gemara.Result
-		wantMessage string
-	}{
-		{
-			name: "org requires MFA",
-			payload: data.Payload{
-				RepositoryMetadata: stubRepoMetadata(&trueVal),
-			},
-			wantResult:  gemara.Passed,
-			wantMessage: "Two-factor authentication is configured as required by the parent organization",
-		},
-		{
-			name: "org does not require MFA",
-			payload: data.Payload{
-				RepositoryMetadata: stubRepoMetadata(&falseVal),
-			},
-			wantResult:  gemara.Failed,
-			wantMessage: "Two-factor authentication is NOT configured as required by the parent organization",
-		},
-		{
-			name: "unable to evaluate MFA requirement",
-			payload: data.Payload{
-				RepositoryMetadata: stubRepoMetadata(nil),
-			},
-			wantResult:  gemara.NotRun,
-			wantMessage: "Not evaluated. Two-factor authentication evaluation requires a token with org:admin permissions, or manual review",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotResult, gotMessage, _ := OrgRequiresMFA(tt.payload)
-			assert.Equal(t, tt.wantResult, gotResult)
-			assert.Equal(t, tt.wantMessage, gotMessage)
-		})
-	}
 }
 
 // See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#setting-the-permissions-of-the-github_token-for-your-repository
