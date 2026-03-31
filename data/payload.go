@@ -85,6 +85,7 @@ func getGraphqlRepoData(config *config.Config) (data *GraphqlRepoData, client *g
 	}
 
 	err = withRetry(config.Logger, "GraphQL repo data query", func() error {
+		data = nil
 		return client.Query(context.Background(), &data, variables)
 	})
 	if err != nil {

@@ -20,7 +20,7 @@ func isTransientError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	for _, indicator := range []string{"502", "503", "429"} {
+	for _, indicator := range []string{" 502 ", " 503 ", " 429 "} {
 		if strings.Contains(msg, indicator) {
 			return true
 		}

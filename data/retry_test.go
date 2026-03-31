@@ -20,6 +20,8 @@ func TestIsTransientError(t *testing.T) {
 		{"404 not found", errors.New("unexpected response: 404 Not Found"), false},
 		{"auth error", errors.New("401 Unauthorized"), false},
 		{"network error", errors.New("connection refused"), false},
+		{"false positive url with 502", errors.New("GET https://api.example.com/v502/resource failed"), false},
+		{"false positive number with 429", errors.New("processed 4291 records"), false},
 	}
 
 	for _, tt := range tests {
@@ -88,10 +90,11 @@ func TestWithRetry_DoesNotRetryNonTransientError(t *testing.T) {
 func TestWithRetry_ExhaustsRetries(t *testing.T) {
 	logger := hclog.NewNullLogger()
 	calls := 0
+	sentinel := errors.New("non-200 OK status code: 502 Bad Gateway")
 
 	err := withRetry(logger, "test op", func() error {
 		calls++
-		return errors.New("non-200 OK status code: 502 Bad Gateway")
+		return sentinel
 	})
 
 	if err == nil {
@@ -100,7 +103,7 @@ func TestWithRetry_ExhaustsRetries(t *testing.T) {
 	if calls != maxRetries {
 		t.Errorf("expected %d calls, got %d", maxRetries, calls)
 	}
-	if !errors.Is(err, err) {
-		t.Errorf("expected wrapped error, got: %v", err)
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected wrapped sentinel error, got: %v", err)
 	}
 }
