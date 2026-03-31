@@ -35,6 +35,7 @@ func withRetry(logger hclog.Logger, operation string, fn func() error) error {
 	backoff := baseBackoff
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logger.Trace(operation)
 		err = fn()
 		if err == nil {
 			return nil

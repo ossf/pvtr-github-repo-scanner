@@ -92,17 +92,17 @@ func (r *RestData) MakeApiCall(endpoint string, isGithub bool) (body []byte, err
 	if logger == nil {
 		logger = hclog.NewNullLogger()
 	}
+	if r.HttpClient == nil {
+		r.HttpClient = &http.Client{}
+	}
+
 	err = withRetry(logger, fmt.Sprintf("GET %s", endpoint), func() error {
-		logger.Trace(fmt.Sprintf("GET %s", endpoint))
 		request, err := http.NewRequest("GET", endpoint, nil)
 		if err != nil {
 			return err
 		}
 		if isGithub {
 			request.Header.Set("Authorization", "Bearer "+r.token)
-		}
-		if r.HttpClient == nil {
-			r.HttpClient = &http.Client{}
 		}
 		response, err := r.HttpClient.Do(request)
 		if err != nil {
