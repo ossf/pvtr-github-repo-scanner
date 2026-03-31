@@ -32,7 +32,9 @@ func countDependencyManifests(client *githubv4.Client, cfg *config.Config) (int,
 		"name":  githubv4.String(cfg.GetString("repo")),
 	}
 
-	err := client.Query(context.Background(), &query, variables)
+	err := withRetry(cfg.Logger, "GraphQL dependency manifests query", func() error {
+		return client.Query(context.Background(), &query, variables)
+	})
 	if err != nil {
 		return 0, err
 	}

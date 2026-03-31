@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	hclog "github.com/hashicorp/go-hclog"
+
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/google/go-github/v74/github"
@@ -83,29 +85,37 @@ func (r *RestData) Setup() error {
 }
 
 func (r *RestData) MakeApiCall(endpoint string, isGithub bool) (body []byte, err error) {
-	if r.Config != nil && r.Config.Logger != nil {
-		r.Config.Logger.Trace(fmt.Sprintf("GET %s", endpoint))
+	var logger hclog.Logger
+	if r.Config != nil {
+		logger = r.Config.Logger
 	}
-	request, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return nil, err
+	if logger == nil {
+		logger = hclog.NewNullLogger()
 	}
-	if isGithub {
-		request.Header.Set("Authorization", "Bearer "+r.token)
-	}
-	if r.HttpClient == nil {
-		r.HttpClient = &http.Client{}
-	}
-	response, err := r.HttpClient.Do(request)
-	if err != nil {
-		err = fmt.Errorf("error making http call: %s", err.Error())
-		return nil, err
-	}
-	if response.StatusCode != 200 {
-		err = fmt.Errorf("unexpected response: %s", response.Status)
-		return nil, err
-	}
-	return io.ReadAll(response.Body)
+	err = withRetry(logger, fmt.Sprintf("GET %s", endpoint), func() error {
+		logger.Trace(fmt.Sprintf("GET %s", endpoint))
+		request, err := http.NewRequest("GET", endpoint, nil)
+		if err != nil {
+			return err
+		}
+		if isGithub {
+			request.Header.Set("Authorization", "Bearer "+r.token)
+		}
+		if r.HttpClient == nil {
+			r.HttpClient = &http.Client{}
+		}
+		response, err := r.HttpClient.Do(request)
+		if err != nil {
+			return fmt.Errorf("error making http call: %s", err.Error())
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != 200 {
+			return fmt.Errorf("unexpected response: %s", response.Status)
+		}
+		body, err = io.ReadAll(response.Body)
+		return err
+	})
+	return body, err
 }
 
 func (r *RestData) getSourceFile(owner, repo, path string) (content *github.RepositoryContent, err error) {

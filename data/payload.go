@@ -84,7 +84,9 @@ func getGraphqlRepoData(config *config.Config) (data *GraphqlRepoData, client *g
 		"name":  githubv4.String(config.GetString("repo")),
 	}
 
-	err = client.Query(context.Background(), &data, variables)
+	err = withRetry(config.Logger, "GraphQL repo data query", func() error {
+		return client.Query(context.Background(), &data, variables)
+	})
 	if err != nil {
 		config.Logger.Error(fmt.Sprintf("Error querying GitHub GraphQL API: %s", err.Error()))
 	}
