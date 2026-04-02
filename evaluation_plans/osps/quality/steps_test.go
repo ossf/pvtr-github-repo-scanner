@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	"github.com/ossf/si-tooling/v2/si"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/si-tooling/v2/si"
 )
 
 func Test_InsightsListsRepositories(t *testing.T) {
@@ -72,4 +72,16 @@ func Test_InsightsListsRepositories(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_NoUnreviewableBinariesInRepo(t *testing.T) {
+	t.Run("invalid payload returns unknown", func(t *testing.T) {
+		result, msg, _ := NoUnreviewableBinariesInRepo("not a payload")
+		if result != gemara.Unknown {
+			t.Errorf("result = %v, want Unknown", result)
+		}
+		if msg == "" {
+			t.Error("expected non-empty message for invalid payload")
+		}
+	})
 }

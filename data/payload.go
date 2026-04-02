@@ -15,7 +15,6 @@ type Payload struct {
 	*GraphqlRepoData
 	*RestData
 	Config                   *config.Config
-	SuspectedBinaries        []string
 	RepositoryMetadata       RepositoryMetadata
 	DependencyManifestsCount int
 	IsCodeRepo               bool
@@ -100,22 +99,36 @@ func getRestData(ghClient *github.Client, config *config.Config) (data *RestData
 	return r, err
 }
 
-func (p *Payload) GetSuspectedBinaries() (suspectedBinaries []string, err error) {
-	branch := p.Repository.DefaultBranchRef.Name
-	tree, err := fetchGraphqlRepoTree(p.Config, p.client, branch)
-	if err != nil {
-		return nil, err
-	}
-	bc := &binaryChecker{
+// newBinaryChecker creates a binaryChecker configured from the payload's
+// repository metadata and HTTP client.
+func (p *Payload) newBinaryChecker() *binaryChecker {
+	return &binaryChecker{
 		httpClient: p.httpClient,
 		logger:     p.Config.Logger,
 		owner:      p.Config.GetString("owner"),
 		repo:       p.Config.GetString("repo"),
-		branch:     branch,
+		branch:     p.Repository.DefaultBranchRef.Name,
 	}
-	binaryFileNames, err := checkTreeForBinaries(tree, bc)
+}
+
+// GetSuspectedBinaries fetches the repository tree and returns file names that
+// appear to be executable binary artifacts per OSPS-QA-05.01.
+func (p *Payload) GetSuspectedBinaries() (suspectedBinaries []string, err error) {
+	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
 	if err != nil {
 		return nil, err
 	}
-	return binaryFileNames, nil
+	return checkTreeForBinaries(tree, p.newBinaryChecker())
+}
+
+// GetUnreviewableBinaries fetches the repository tree and returns file names that
+// are unreviewable binary artifacts per OSPS-QA-05.02. This differs from
+// GetSuspectedBinaries by flagging all binaries except acceptable content types
+// like images, audio, video, fonts, and PDFs.
+func (p *Payload) GetUnreviewableBinaries() (unreviewableBinaries []string, err error) {
+	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
+	if err != nil {
+		return nil, err
+	}
+	return checkTreeForUnreviewableBinaries(tree, p.newBinaryChecker())
 }
