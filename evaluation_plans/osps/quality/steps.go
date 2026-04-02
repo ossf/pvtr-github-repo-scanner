@@ -144,6 +144,28 @@ func NoBinariesInRepo(payloadData any) (result gemara.Result, message string, co
 	return gemara.Failed, fmt.Sprintf("Suspected binaries found in the repository: %s", strings.Join(suspectedBinaries, ", ")), confidence
 }
 
+// NoUnreviewableBinariesInRepo is the assessment step for OSPS-QA-05.02.
+// It checks that the version control system does not contain unreviewable binary
+// artifacts such as compiled executables, shared libraries, or archive binaries.
+// Acceptable binary content (images, audio, video, fonts, PDFs) is not flagged.
+func NoUnreviewableBinariesInRepo(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	data, message := reusable_steps.VerifyPayload(payloadData)
+	if message != "" {
+		return gemara.Unknown, message, confidence
+	}
+
+	unreviewableBinaries, err := data.GetUnreviewableBinaries()
+	if err != nil {
+		data.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
+		return gemara.Unknown, "Error while scanning repository for unreviewable binaries, potentially due to repo size. See logs for details.", confidence
+	}
+
+	if len(unreviewableBinaries) == 0 {
+		return gemara.Passed, "No unreviewable binary artifacts were found in the repository", confidence
+	}
+	return gemara.Failed, fmt.Sprintf("Unreviewable binary artifacts found in the repository: %s", strings.Join(unreviewableBinaries, ", ")), confidence
+}
+
 func RequiresNonAuthorApproval(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	data, message := reusable_steps.VerifyPayload(payloadData)
 	if message != "" {

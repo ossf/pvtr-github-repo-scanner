@@ -177,7 +177,7 @@ var (
 			quality.NoBinariesInRepo,
 		},
 		"OSPS-QA-05.02": {
-			reusable_steps.NotImplemented,
+			quality.NoUnreviewableBinariesInRepo,
 		},
 		"OSPS-QA-06.01": {
 			reusable_steps.IsCodeRepo,
