@@ -661,3 +661,418 @@ func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *Graph
 
 	return tree
 }
+
+func TestAcceptableBinaryExtension(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{name: "no extension", path: "file", expected: false},
+		{name: "empty extension", path: "file.", expected: false},
+		{name: "go source", path: "main.go", expected: false},
+		{name: "jar file", path: "app.jar", expected: false},
+		{name: "exe file", path: "app.exe", expected: false},
+		{name: "dll file", path: "lib.dll", expected: false},
+		{name: "so file", path: "lib.so", expected: false},
+		// Images — acceptable
+		{name: "png image", path: "logo.png", expected: true},
+		{name: "jpg image", path: "photo.jpg", expected: true},
+		{name: "jpeg image", path: "photo.jpeg", expected: true},
+		{name: "gif image", path: "anim.gif", expected: true},
+		{name: "webp image", path: "image.webp", expected: true},
+		{name: "ico image", path: "favicon.ico", expected: true},
+		{name: "tiff image", path: "scan.tiff", expected: true},
+		{name: "avif image", path: "photo.avif", expected: true},
+		// Audio — acceptable
+		{name: "mp3 audio", path: "song.mp3", expected: true},
+		{name: "wav audio", path: "sound.wav", expected: true},
+		{name: "ogg audio", path: "audio.ogg", expected: true},
+		{name: "flac audio", path: "music.flac", expected: true},
+		// Video — acceptable
+		{name: "mp4 video", path: "clip.mp4", expected: true},
+		{name: "webm video", path: "clip.webm", expected: true},
+		// Fonts — acceptable
+		{name: "ttf font", path: "font.ttf", expected: true},
+		{name: "woff2 font", path: "font.woff2", expected: true},
+		// Documents — acceptable
+		{name: "pdf document", path: "doc.pdf", expected: true},
+		// Case insensitive
+		{name: "upper PNG", path: "logo.PNG", expected: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := acceptableBinaryExtension(tt.path)
+			if result != tt.expected {
+				t.Errorf("acceptableBinaryExtension(%s) = %v, want %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCheckUnreviewable(t *testing.T) {
+	bc := &binaryChecker{logger: hclog.NewNullLogger()}
+
+	t.Run("non-binary file returns false", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(boolPtr(false), false, "main.go")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected non-binary file to return false")
+		}
+	})
+
+	t.Run("binary with acceptable extension returns false", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(boolPtr(true), false, "logo.png")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected binary PNG to return false (acceptable)")
+		}
+	})
+
+	t.Run("binary with unacceptable extension returns true", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(boolPtr(true), false, "app.jar")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if !result {
+			t.Error("expected binary JAR to return true (unreviewable)")
+		}
+	})
+
+	t.Run("binary executable flagged as unreviewable", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(boolPtr(true), false, "app.exe")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if !result {
+			t.Error("expected binary EXE to return true (unreviewable)")
+		}
+	})
+
+	t.Run("binary font file not flagged", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(boolPtr(true), false, "font.woff2")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected binary font to return false (acceptable)")
+		}
+	})
+
+	t.Run("nil isBinary with text extension returns false", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(nil, false, "README.md")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected nil isBinary with text extension to return false")
+		}
+	})
+
+	t.Run("nil isBinary not truncated returns false", func(t *testing.T) {
+		result, err := bc.checkUnreviewable(nil, false, "somefile")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected nil isBinary with not truncated to return false")
+		}
+	})
+
+	t.Run("nil isBinary truncated binary unacceptable extension returns true", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0xcf, 0xfa, 0xed, 0xfe, 0x00, 0x01, 0x02})
+		}))
+		defer server.Close()
+
+		bc := &binaryChecker{
+			httpClient: server.Client(),
+			logger:     hclog.NewNullLogger(),
+			owner:      "test",
+			repo:       "repo",
+			branch:     "main",
+		}
+		bc.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+		result, err := bc.checkUnreviewable(nil, true, "app.jar")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if !result {
+			t.Error("expected nil isBinary + truncated + binary content + unacceptable extension to return true")
+		}
+	})
+
+	t.Run("nil isBinary truncated binary acceptable extension returns false", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}) // PNG header
+		}))
+		defer server.Close()
+
+		bc := &binaryChecker{
+			httpClient: server.Client(),
+			logger:     hclog.NewNullLogger(),
+			owner:      "test",
+			repo:       "repo",
+			branch:     "main",
+		}
+		bc.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+		result, err := bc.checkUnreviewable(nil, true, "logo.png")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected nil isBinary + truncated + binary content + acceptable extension (.png) to return false")
+		}
+	})
+
+	t.Run("nil isBinary truncated text content returns false", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("hello world this is text content"))
+		}))
+		defer server.Close()
+
+		bc := &binaryChecker{
+			httpClient: server.Client(),
+			logger:     hclog.NewNullLogger(),
+			owner:      "test",
+			repo:       "repo",
+			branch:     "main",
+		}
+		bc.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+		result, err := bc.checkUnreviewable(nil, true, "data.bin")
+		if err != nil {
+			t.Errorf("checkUnreviewable() error = %v", err)
+		}
+		if result {
+			t.Error("expected nil isBinary + truncated + text content to return false")
+		}
+	})
+}
+
+func TestCheckTreeForUnreviewableBinaries(t *testing.T) {
+	bc := &binaryChecker{logger: hclog.NewNullLogger()}
+
+	tests := []struct {
+		name     string
+		tree     *GraphqlRepoTree
+		expected []string
+	}{
+		{
+			name:     "nil tree returns nil",
+			tree:     nil,
+			expected: nil,
+		},
+		{
+			name:     "empty tree returns no binaries",
+			tree:     &GraphqlRepoTree{},
+			expected: nil,
+		},
+		{
+			name: "text files not flagged",
+			tree: buildTree([]testEntry{
+				{name: "README.md", isBinary: boolPtr(false)},
+				{name: "main.go", isBinary: boolPtr(false)},
+			}),
+			expected: nil,
+		},
+		{
+			name: "acceptable binary files not flagged",
+			tree: buildTree([]testEntry{
+				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "icon.ico", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "doc.pdf", isBinary: boolPtr(true), mode: modeNonExecutable},
+			}),
+			expected: nil,
+		},
+		{
+			name: "unreviewable binary files flagged",
+			tree: buildTree([]testEntry{
+				{name: "app.jar", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "lib.dll", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "README.md", isBinary: boolPtr(false)},
+			}),
+			expected: []string{"app.jar", "lib.dll"},
+		},
+		{
+			name: "mix of acceptable and unreviewable binaries",
+			tree: buildTree([]testEntry{
+				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
+				{name: "app.exe", isBinary: boolPtr(true), mode: modeExecutable},
+				{name: "font.woff2", isBinary: boolPtr(true), mode: modeNonExecutable},
+			}),
+			expected: []string{"app.exe"},
+		},
+		{
+			name: "nested unreviewable binary detected",
+			tree: buildTreeWithNested(
+				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
+				[]testEntry{{name: "wrapper.jar", isBinary: boolPtr(true), mode: modeNonExecutable}},
+			),
+			expected: []string{"wrapper.jar"},
+		},
+		{
+			name: "level 3 nested unreviewable binary detected",
+			tree: buildTreeWithLevel3(
+				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
+				[]testEntry{},
+				[]testEntry{{name: "hidden.dll", isBinary: boolPtr(true), mode: modeNonExecutable}},
+			),
+			expected: []string{"hidden.dll"},
+		},
+		{
+			name: "acceptable binary in nested subtree not flagged",
+			tree: buildTreeWithNested(
+				[]testEntry{},
+				[]testEntry{{name: "photo.jpg", isBinary: boolPtr(true), mode: modeNonExecutable}},
+			),
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := checkTreeForUnreviewableBinaries(tt.tree, bc)
+			if err != nil {
+				t.Errorf("checkTreeForUnreviewableBinaries() error = %v", err)
+				return
+			}
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("got %d binaries, want %d\ngot: %v\nwant: %v",
+					len(result), len(tt.expected), result, tt.expected)
+				return
+			}
+
+			for i, name := range tt.expected {
+				if result[i] != name {
+					t.Errorf("binary[%d] = %q, want %q", i, result[i], name)
+				}
+			}
+		})
+	}
+}
+
+func buildTreeWithLevel3(rootEntries []testEntry, level2Entries []testEntry, level3Entries []testEntry) *GraphqlRepoTree {
+	tree := buildTreeWithNested(rootEntries, level2Entries)
+
+	// Find the "subdir" tree entry added by buildTreeWithNested
+	for i := range tree.Repository.Object.Tree.Entries {
+		if tree.Repository.Object.Tree.Entries[i].Type == "tree" {
+			// Add a sub-subtree inside it
+			subDirEntry := struct {
+				Name   string
+				Type   string
+				Path   string
+				Mode   int
+				Object *struct {
+					Blob struct {
+						IsBinary    *bool
+						IsTruncated bool
+					} `graphql:"... on Blob"`
+					Tree struct {
+						Entries []struct {
+							Name   string
+							Type   string
+							Path   string
+							Mode   int
+							Object *struct {
+								Blob struct {
+									IsBinary    *bool
+									IsTruncated bool
+								} `graphql:"... on Blob"`
+							} `graphql:"object"`
+						}
+					} `graphql:"... on Tree"`
+				} `graphql:"object"`
+			}{
+				Name: "deep",
+				Type: "tree",
+				Path: "subdir/deep",
+			}
+			subDirEntry.Object = &struct {
+				Blob struct {
+					IsBinary    *bool
+					IsTruncated bool
+				} `graphql:"... on Blob"`
+				Tree struct {
+					Entries []struct {
+						Name   string
+						Type   string
+						Path   string
+						Mode   int
+						Object *struct {
+							Blob struct {
+								IsBinary    *bool
+								IsTruncated bool
+							} `graphql:"... on Blob"`
+						} `graphql:"object"`
+					}
+				} `graphql:"... on Tree"`
+			}{}
+
+			for _, e := range level3Entries {
+				l3Entry := struct {
+					Name   string
+					Type   string
+					Path   string
+					Mode   int
+					Object *struct {
+						Blob struct {
+							IsBinary    *bool
+							IsTruncated bool
+						} `graphql:"... on Blob"`
+					} `graphql:"object"`
+				}{
+					Name: e.name,
+					Type: "blob",
+					Path: "subdir/deep/" + e.name,
+					Mode: e.mode,
+				}
+				l3Entry.Object = &struct {
+					Blob struct {
+						IsBinary    *bool
+						IsTruncated bool
+					} `graphql:"... on Blob"`
+				}{}
+				l3Entry.Object.Blob.IsBinary = e.isBinary
+				subDirEntry.Object.Tree.Entries = append(subDirEntry.Object.Tree.Entries, l3Entry)
+			}
+
+			tree.Repository.Object.Tree.Entries[i].Object.Tree.Entries = append(
+				tree.Repository.Object.Tree.Entries[i].Object.Tree.Entries, subDirEntry)
+			break
+		}
+	}
+	return tree
+}
+
+func TestCheckUnreviewablePartialFetchError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	bc := &binaryChecker{
+		httpClient: server.Client(),
+		logger:     hclog.NewNullLogger(),
+		owner:      "test",
+		repo:       "repo",
+		branch:     "main",
+	}
+	bc.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+	_, err := bc.checkUnreviewable(nil, true, "unknown.bin")
+	if err == nil {
+		t.Error("expected error when partial fetch returns 500")
+	}
+}
