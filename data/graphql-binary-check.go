@@ -96,8 +96,18 @@ func (bc *binaryChecker) check(isBinaryPtr *bool, isTruncated bool, path string,
 		if err != nil {
 			return false, fmt.Errorf("failed to check binary status via partial fetch for %s: %w", path, err)
 		}
+		// Filter out acceptable binary formats (images, audio, video, fonts, PDFs)
+		// so they are not incorrectly flagged as suspected executable binaries.
+		if binary && acceptableBinaryExtension(path) {
+			return false, nil
+		}
 		return binary, nil
 	}
+	// TODO: When isBinaryPtr is nil and the file is not truncated, we have no
+	// content to inspect and silently return false. A binary artifact in this
+	// state (e.g. a file where GitHub couldn't determine binary status) will
+	// pass undetected. This matches checkUnreviewable() behavior and is a
+	// known limitation.
 	return false, nil
 }
 
@@ -228,15 +238,19 @@ func (bc *binaryChecker) checkUnreviewable(isBinaryPtr *bool, isTruncated bool, 
 		return false, nil
 	}
 	if isTruncated {
+		if acceptableBinaryExtension(path) {
+			return false, nil
+		}
 		binary, err := bc.checkViaPartialFetch(path)
 		if err != nil {
 			return false, fmt.Errorf("failed to check binary status via partial fetch for %s: %w", path, err)
 		}
-		if binary && acceptableBinaryExtension(path) {
-			return false, nil
-		}
 		return binary, nil
 	}
+	// TODO: When isBinaryPtr is nil and the file is not truncated, we have no
+	// content to inspect and silently return false. A binary artifact in this
+	// state (e.g. a file where GitHub couldn't determine binary status) will
+	// pass undetected. This matches check() behavior and is a known limitation.
 	return false, nil
 }
 

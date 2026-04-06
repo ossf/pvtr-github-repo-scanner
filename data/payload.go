@@ -21,6 +21,7 @@ type Payload struct {
 	SecurityPosture          SecurityPosture
 	client                   *githubv4.Client
 	httpClient               *http.Client
+	cachedTree               *GraphqlRepoTree
 }
 
 func Loader(config *config.Config) (payload any, err error) {
@@ -114,10 +115,24 @@ func (p *Payload) newBinaryChecker() *binaryChecker {
 	}
 }
 
+// getTree lazily fetches and caches the repository tree so that multiple
+// checks (e.g. QA-05.01 and QA-05.02) share a single GraphQL API call.
+func (p *Payload) getTree() (*GraphqlRepoTree, error) {
+	if p.cachedTree != nil {
+		return p.cachedTree, nil
+	}
+	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
+	if err != nil {
+		return nil, err
+	}
+	p.cachedTree = tree
+	return tree, nil
+}
+
 // GetSuspectedBinaries fetches the repository tree and returns file names that
 // appear to be executable binary artifacts per OSPS-QA-05.01.
 func (p *Payload) GetSuspectedBinaries() (suspectedBinaries []string, err error) {
-	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
+	tree, err := p.getTree()
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +144,7 @@ func (p *Payload) GetSuspectedBinaries() (suspectedBinaries []string, err error)
 // GetSuspectedBinaries by flagging all binaries except acceptable content types
 // like images, audio, video, fonts, and PDFs.
 func (p *Payload) GetUnreviewableBinaries() (unreviewableBinaries []string, err error) {
-	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
+	tree, err := p.getTree()
 	if err != nil {
 		return nil, err
 	}

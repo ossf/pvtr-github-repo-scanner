@@ -176,6 +176,58 @@ func TestBinaryCheckerIsBinary(t *testing.T) {
 			t.Error("expected nil isBinary with isTruncated=false to return false")
 		}
 	})
+
+	t.Run("nil isBinary truncated PNG not flagged as executable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}) // PNG header
+		}))
+		defer server.Close()
+
+		bcWithHTTP := &binaryChecker{
+			httpClient: server.Client(),
+			logger:     hclog.NewNullLogger(),
+			owner:      "test",
+			repo:       "repo",
+			branch:     "main",
+		}
+		bcWithHTTP.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+		result, err := bcWithHTTP.check(nil, true, "logo.png", modeNonExecutable)
+		if err != nil {
+			t.Errorf("check() error = %v", err)
+			return
+		}
+		if result {
+			t.Error("expected truncated PNG with nil isBinary to not be flagged as suspected executable binary")
+		}
+	})
+
+	t.Run("nil isBinary truncated binary with unacceptable extension flagged", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte{0xcf, 0xfa, 0xed, 0xfe, 0x00, 0x01, 0x02}) // Mach-O binary
+		}))
+		defer server.Close()
+
+		bcWithHTTP := &binaryChecker{
+			httpClient: server.Client(),
+			logger:     hclog.NewNullLogger(),
+			owner:      "test",
+			repo:       "repo",
+			branch:     "main",
+		}
+		bcWithHTTP.httpClient.Transport = &testTransport{baseURL: server.URL, transport: http.DefaultTransport}
+
+		result, err := bcWithHTTP.check(nil, true, "app.bin", modeExecutable)
+		if err != nil {
+			t.Errorf("check() error = %v", err)
+			return
+		}
+		if !result {
+			t.Error("expected truncated binary with unacceptable extension to be flagged")
+		}
+	})
 }
 
 func TestCommonAcceptableFileExtension(t *testing.T) {
@@ -307,6 +359,20 @@ func TestCheckViaPartialFetch(t *testing.T) {
 			responseStatus: http.StatusInternalServerError,
 			wantBinary:     false,
 			wantErr:        true,
+		},
+		{
+			name:           "PNG magic bytes detected as binary",
+			responseBody:   []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a},
+			responseStatus: http.StatusPartialContent,
+			wantBinary:     true,
+			wantErr:        false,
+		},
+		{
+			name:           "WAV magic bytes detected as binary",
+			responseBody:   []byte{0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45},
+			responseStatus: http.StatusPartialContent,
+			wantBinary:     true,
+			wantErr:        false,
 		},
 	}
 
