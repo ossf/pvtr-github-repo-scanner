@@ -84,6 +84,8 @@ gh release download \
 tar xzf "/tmp/$ASSET_PATTERN" -C "./tmp" || { echo "ERROR: Failed to extract plugin"; exit 1; }
 
 # Generate config for testing against the repo
+# Tracing is disabled here to prevent GITHUB_TOKEN from appearing in logs
+set +x
 cat > "$CONFIG_FILE" <<EOF
 loglevel: trace
 write-directory: evaluation_results
@@ -102,6 +104,7 @@ services:
       repo: pvtr-github-repo-scanner
       token: ${GITHUB_TOKEN}
 EOF
+set -x
 
 # Run pvtr with the plugin
 ./tmp/pvtr run -b "$PLUGIN_DIR" -c "$CONFIG_FILE" || STATUS=1
