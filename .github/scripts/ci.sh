@@ -63,9 +63,17 @@ if [ "$RELEASE_OS" = "Darwin" ]; then
   RELEASE_ARCH="all"
 fi
 
+PRIVATEER_VERSION=$(awk -F= '/^ARG VERSION=/{print $2; exit}' Dockerfile)
+if [ -z "$PRIVATEER_VERSION" ]; then
+  echo "ERROR: Failed to determine privateer version from Dockerfile"
+  exit 1
+fi
+
 ASSET_PATTERN="privateer_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
+ASSET_TAG="v${PRIVATEER_VERSION}"
 PLUGIN_DIR="./tmp/plugins"
 CONFIG_FILE="./tmp/test_config.yml"
+PRIVATEER_BIN=""
 
 # Ensure cleanup happens even on unexpected exits or signals
 trap 'rm -rf "./tmp"' EXIT
@@ -74,14 +82,24 @@ trap 'rm -rf "./tmp"' EXIT
 mkdir -p "$PLUGIN_DIR"
 cp github-repo "$PLUGIN_DIR/" || { echo "ERROR: Failed to copy plugin binary"; exit 1; }
 
-# Download latest pvtr release
+# Download the same pvtr release version used by the Docker image.
 gh release download \
+  "$ASSET_TAG" \
   --repo privateerproj/privateer \
   --pattern "$ASSET_PATTERN" \
   --dir /tmp \
   --clobber || { echo "ERROR: Failed to download pvtr release"; exit 1; }
 
 tar xzf "/tmp/$ASSET_PATTERN" -C "./tmp" || { echo "ERROR: Failed to extract plugin"; exit 1; }
+
+if [ -x "./tmp/pvtr" ]; then
+  PRIVATEER_BIN="./tmp/pvtr"
+elif [ -x "./tmp/privateer" ]; then
+  PRIVATEER_BIN="./tmp/privateer"
+else
+  echo "ERROR: Failed to locate privateer binary after extraction"
+  exit 1
+fi
 
 # Generate config for testing against the repo
 # Tracing is disabled here to prevent GITHUB_TOKEN from appearing in logs
@@ -107,6 +125,6 @@ EOF
 set -x
 
 # Run pvtr with the plugin
-./tmp/pvtr run -b "$PLUGIN_DIR" -c "$CONFIG_FILE" || STATUS=1
+"$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$CONFIG_FILE" || STATUS=1
 
 exit $STATUS

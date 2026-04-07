@@ -1,0 +1,67 @@
+name: Update privateer version pin
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Weekly on Monday, matching Dependabot cadence
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Get latest privateer release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh api repos/privateerproj/privateer/releases/latest --jq .tag_name)
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Get current pinned version
+        id: current
+        run: |
+          CURRENT=$(grep -oP 'ARG VERSION=\K\S+' Dockerfile)
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR if version changed
+        if: steps.latest.outputs.version != steps.current.outputs.version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.latest.outputs.version }}
+          OLD_VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="chore/bump-privateer-${NEW_VERSION}"
+
+          # Skip if a PR for this version is already open
+          existing=$(gh pr list --head "$BRANCH" --json number --jq 'length')
+          if [[ "$existing" -gt 0 ]]; then
+            echo "PR already open for $BRANCH, skipping"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          sed -i "s/ARG VERSION=${OLD_VERSION}/ARG VERSION=${NEW_VERSION}/" Dockerfile
+          git add Dockerfile
+          git commit -m "chore(deps): bump privateer from ${OLD_VERSION} to ${NEW_VERSION}"
+          git push --force origin "$BRANCH"
+
+          cat > pr-body.txt <<'EOF'
+          Automated update of `ARG VERSION` in Dockerfile.
+
+          Dependabot does not support `ARG`-based version pins; this workflow covers that gap.
+          EOF
+
+          gh pr create \
+            --title "chore(deps): bump privateer from ${OLD_VERSION} to ${NEW_VERSION}" \
+            --body-file pr-body.txt \
+            --label "dependencies"
