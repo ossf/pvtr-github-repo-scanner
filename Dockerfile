@@ -8,13 +8,13 @@ ARG PLATFORM=Linux_x86_64  # Change this based on your target system
 RUN wget https://github.com/privateerproj/privateer/releases/download/v${VERSION}/privateer_${PLATFORM}.tar.gz
 RUN tar -xzf privateer_${PLATFORM}.tar.gz
 
-FROM golang:1.25.1-alpine3.22@sha256:b6ed3fd0452c0e9bcdef5597f29cc1418f61672e9d3a2f55bf02e7222c014abd AS plugin
+FROM golang:1.26.1-alpine3.22@sha256:07e91d24f6330432729082bb580983181809e0a48f0f38ecde26868d4568c6ac AS plugin
 RUN apk add --no-cache make git
 WORKDIR /plugin
 COPY . .
 RUN make binary
 
-FROM golang:1.25.1-alpine3.22@sha256:b6ed3fd0452c0e9bcdef5597f29cc1418f61672e9d3a2f55bf02e7222c014abd
+FROM golang:1.26.1-alpine3.22@sha256:07e91d24f6330432729082bb580983181809e0a48f0f38ecde26868d4568c6ac
 RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
 
 RUN mkdir -p /.privateer/bin && chown -R appuser:appgroup /.privateer
