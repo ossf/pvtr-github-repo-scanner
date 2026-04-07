@@ -150,9 +150,9 @@ func checkWorkflowFileForBranchNameUsage(workflow *actionlint.Workflow) (bool, s
 			for _, name := range varList {
 				nameBytes := []byte(name)
 				if alwaysUnsafeBranchVars.Match(nameBytes) {
-					message.WriteString(fmt.Sprintf("Unsanitized branch name variable found: %v\n", name))
+					fmt.Fprintf(&message, "Unsanitized branch name variable found: %v\n", name)
 				} else if hasPullRequestTrigger && pullRequestOnlyUnsafeBranchVars.Match(nameBytes) {
-					message.WriteString(fmt.Sprintf("Attacker-controllable ref variable in pull_request workflow: %v\n", name))
+					fmt.Fprintf(&message, "Attacker-controllable ref variable in pull_request workflow: %v\n", name)
 				}
 			}
 		}
