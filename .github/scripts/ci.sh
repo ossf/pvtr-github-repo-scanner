@@ -82,6 +82,11 @@ trap 'rm -rf "./tmp"' EXIT
 mkdir -p "$PLUGIN_DIR"
 cp github-repo "$PLUGIN_DIR/" || { echo "ERROR: Failed to copy plugin binary"; exit 1; }
 
+# Register the plugin in the manifest so pvtr treats it as installed.
+cat > "$PLUGIN_DIR/plugins.json" <<EOF
+{"plugins":[{"name":"github-repo","version":"local","binaryPath":"github-repo"}]}
+EOF
+
 # Download the same pvtr release version used by the Docker image.
 gh release download \
   "$ASSET_TAG" \
@@ -123,6 +128,12 @@ services:
       token: ${GITHUB_TOKEN}
 EOF
 set -x
+
+# Confirm plugin is in PLUGIN_DIR
+ls "$PLUGIN_DIR"
+
+# Confirm plugin is installed and in config
+"$PRIVATEER_BIN" list -b "$PLUGIN_DIR" -c "$CONFIG_FILE"
 
 # Run pvtr with the plugin
 "$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$CONFIG_FILE" || STATUS=1
