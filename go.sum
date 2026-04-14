@@ -43,8 +43,8 @@ github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/gabriel-vasile/mimetype v1.4.13 h1:46nXokslUBsAJE/wMsp5gtO500a4F3Nkz9Ufpk2AcUM=
 github.com/gabriel-vasile/mimetype v1.4.13/go.mod h1:d+9Oxyo1wTzWdyVUPMmXFvp4F9tea18J8ufA774AB3s=
-github.com/gemaraproj/go-gemara v0.0.2 h1:XA8HFQK5B6ltU5Xc0Z3eMArATiVuXjfbHR65lDmdTHQ=
-github.com/gemaraproj/go-gemara v0.0.2/go.mod h1:hm4ELSJ9W/L413seDnlFIbHrXbNq6+YJK7DFQHHjNk4=
+github.com/gemaraproj/go-gemara v0.3.0 h1:azCDwI7kR1tDF9+KIIV+EQYbb1uNNZhA++RoU63ImZk=
+github.com/gemaraproj/go-gemara v0.3.0/go.mod h1:soDwOy6Xhhi6evU7viVZ1WPYnGLHWFEbnL0AMha+/v4=
 github.com/gliderlabs/ssh v0.3.8 h1:a4YXD1V7xMF9g5nTkdfnja3Sxy1PVDCj1Zg4Wb8vY6c=
 github.com/gliderlabs/ssh v0.3.8/go.mod h1:xYoytBv1sV0aL3CavoDuJIQNURXkkfPA/wxQ1pL1fAU=
 github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 h1:+zs/tPmkDkHx3U66DAb0lQFJrpS6731Oaa12ikc+DiI=
@@ -134,8 +134,8 @@ github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINE
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/privateerproj/privateer-sdk v1.22.1 h1:L3aPuEJFoTBfDyk/aF304qaOoZcFhltBI55MAZAycaA=
-github.com/privateerproj/privateer-sdk v1.22.1/go.mod h1:Ydgaph696cp8jkVmt6GGIl/4hVpGZ3RzAoF7e8APhmA=
+github.com/privateerproj/privateer-sdk v1.23.3 h1:izf8YKLprCMNkxoi9tNdlx71nquAvqe88kLw46IWY8Q=
+github.com/privateerproj/privateer-sdk v1.23.3/go.mod h1:VjTI+mwc80cxn5QWlJAnJvheGtglMwrS4SVQA/9jO0Y=
 github.com/rhysd/actionlint v1.7.12 h1:vQ4GeJN86C0QH+gTUQcs8McmK62OLT3kmakPMtEWYnY=
 github.com/rhysd/actionlint v1.7.12/go.mod h1:krOUhujIsJusovkaYzQ/VNH8PFexjNKqU0q5XI/4w+g=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=

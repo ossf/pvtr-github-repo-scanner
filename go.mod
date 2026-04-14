@@ -4,12 +4,12 @@ go 1.26.2
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.13
-	github.com/gemaraproj/go-gemara v0.0.2
+	github.com/gemaraproj/go-gemara v0.3.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/go-github/v74 v74.0.0
 	github.com/migueleliasweb/go-github-mock v1.5.0
 	github.com/ossf/si-tooling/v2 v2.2.0
-	github.com/privateerproj/privateer-sdk v1.22.1
+	github.com/privateerproj/privateer-sdk v1.23.3
 	github.com/rhysd/actionlint v1.7.12
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	golang.org/x/oauth2 v0.36.0
