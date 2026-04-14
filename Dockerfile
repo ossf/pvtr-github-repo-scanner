@@ -21,7 +21,7 @@ RUN mkdir -p /.privateer/bin && chown -R appuser:appgroup /.privateer
 WORKDIR /.privateer/bin
 USER appuser
 
-COPY --from=core /app/privateer .
+COPY --from=core /app/pvtr .
 COPY --from=plugin /plugin/github-repo .
 COPY --from=plugin /plugin/container-entrypoint.sh .
 
