@@ -88,7 +88,7 @@ require (
 )
 
 // Uncomment if you're working on a dependency locally
-// replace github.com/privateerproj/privateer-sdk => ../privateer-sdk
+replace github.com/privateerproj/privateer-sdk => ../../privateer-sdk
 
 // replace github.com/gemaraproj/go-gemara => ../../gemaraproj/go-gemara
 

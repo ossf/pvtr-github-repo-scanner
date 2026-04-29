@@ -12,6 +12,7 @@ import (
 
 	"github.com/privateerproj/privateer-sdk/command"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
+	"github.com/privateerproj/privateer-sdk/shared"
 )
 
 var (
@@ -50,7 +51,7 @@ func main() {
 	err := orchestrator.AddReferenceCatalogs(dataDir, files)
 	if err != nil {
 		fmt.Printf("Error loading catalog: %v\n", err)
-		os.Exit(1)
+		os.Exit(shared.InternalError)
 	}
 
 	orchestrator.AddRequiredVars(RequiredVars)
@@ -58,7 +59,7 @@ func main() {
 	err = orchestrator.AddEvaluationSuiteForAllCatalogs(nil, evaluation_plans.AllSteps())
 	if err != nil {
 		fmt.Printf("Error adding evaluation suites: %v\n", err)
-		os.Exit(1)
+		os.Exit(shared.InternalError)
 	}
 
 	runCmd := command.NewPluginCommands(
@@ -71,6 +72,6 @@ func main() {
 
 	err = runCmd.Execute()
 	if err != nil {
-		os.Exit(1)
+		os.Exit(shared.InternalError)
 	}
 }
