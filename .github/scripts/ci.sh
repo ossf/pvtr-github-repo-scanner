@@ -135,7 +135,14 @@ ls "$PLUGIN_DIR"
 # Confirm plugin is installed and in config
 "$PRIVATEER_BIN" list -b "$PLUGIN_DIR" -c "$CONFIG_FILE"
 
-# Run pvtr with the plugin
-"$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$CONFIG_FILE" || STATUS=1
+# Run pvtr with the plugin.
+# Exit 0 (all checks passed) and exit 1 (some checks failed) both indicate the
+# plugin ran to completion. Any other exit code means pvtr/the plugin crashed,
+# which should fail CI.
+"$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$CONFIG_FILE"
+RUN_STATUS=$?
+if [ "$RUN_STATUS" -ne 0 ] && [ "$RUN_STATUS" -ne 1 ]; then
+  STATUS=$RUN_STATUS
+fi
 
 exit $STATUS
