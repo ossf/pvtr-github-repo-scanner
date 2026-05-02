@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	"github.com/ossf/si-tooling/v2/si"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/si-tooling/v2/si"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +14,7 @@ func ptrTo[T any](v T) *T { return &v }
 type testingData struct {
 	expectedResult   gemara.Result
 	expectedMessage  string
-	payloadData      any
+	payload          data.Payload
 	assertionMessage string
 }
 
@@ -24,7 +24,7 @@ func TestHasDependencyManagementPolicy(t *testing.T) {
 		{
 			expectedResult:  gemara.Passed,
 			expectedMessage: "Found dependency management policy in documentation",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -40,7 +40,7 @@ func TestHasDependencyManagementPolicy(t *testing.T) {
 		{
 			expectedResult:  gemara.Failed,
 			expectedMessage: "No dependency management file found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -54,7 +54,7 @@ func TestHasDependencyManagementPolicy(t *testing.T) {
 		{
 			expectedResult:  gemara.Failed,
 			expectedMessage: "No dependency management file found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -68,7 +68,7 @@ func TestHasDependencyManagementPolicy(t *testing.T) {
 	}
 
 	for _, test := range testData {
-		result, message, _ := HasDependencyManagementPolicy(test.payloadData)
+		result, message, _ := HasDependencyManagementPolicy(test.payload)
 		assert.Equal(t, test.expectedResult, result, test.assertionMessage)
 		assert.Equal(t, test.expectedMessage, message, test.assertionMessage)
 	}
@@ -77,14 +77,14 @@ func TestHasDependencyManagementPolicy(t *testing.T) {
 func TestIsCodeRepo(t *testing.T) {
 	tests := []struct {
 		name             string
-		payloadData      any
+		payload          data.Payload
 		expectedResult   gemara.Result
 		expectedMessage  string
 		assertionMessage string
 	}{
 		{
 			name: "Repository contains code",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				IsCodeRepo: true,
 			},
 			expectedResult:   gemara.Passed,
@@ -93,7 +93,7 @@ func TestIsCodeRepo(t *testing.T) {
 		},
 		{
 			name: "Repository does not contain code",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				IsCodeRepo: false,
 			},
 			expectedResult:   gemara.NotApplicable,
@@ -102,7 +102,6 @@ func TestIsCodeRepo(t *testing.T) {
 		},
 		{
 			name:             "Malformed payload type",
-			payloadData:      "not a payload",
 			expectedResult:   gemara.Unknown,
 			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
 			assertionMessage: "Should return Unknown for wrong payload type",
@@ -110,7 +109,7 @@ func TestIsCodeRepo(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, message, _ := IsCodeRepo(tt.payloadData)
+		result, message, _ := IsCodeRepo(tt.payload)
 		assert.Equal(t, tt.expectedResult, result, tt.assertionMessage)
 		assert.Equal(t, tt.expectedMessage, message, tt.assertionMessage)
 	}
@@ -118,14 +117,14 @@ func TestIsCodeRepo(t *testing.T) {
 func TestHasSecurityInsightsFile(t *testing.T) {
 	tests := []struct {
 		name             string
-		payloadData      any
+		payload          data.Payload
 		expectedResult   gemara.Result
 		expectedMessage  string
 		assertionMessage string
 	}{
 		{
 			name: "Security insights file found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Header: si.Header{
@@ -140,7 +139,7 @@ func TestHasSecurityInsightsFile(t *testing.T) {
 		},
 		{
 			name: "Security insights file not found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Header: si.Header{
@@ -155,7 +154,6 @@ func TestHasSecurityInsightsFile(t *testing.T) {
 		},
 		{
 			name:             "Malformed payload type",
-			payloadData:      "not a payload",
 			expectedResult:   gemara.Unknown,
 			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
 			assertionMessage: "Should return Unknown for wrong payload type",
@@ -163,7 +161,7 @@ func TestHasSecurityInsightsFile(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, message, _ := HasSecurityInsightsFile(tt.payloadData)
+		result, message, _ := HasSecurityInsightsFile(tt.payload)
 		assert.Equal(t, tt.expectedResult, result, tt.assertionMessage)
 		assert.Equal(t, tt.expectedMessage, message, tt.assertionMessage)
 	}
@@ -171,14 +169,14 @@ func TestHasSecurityInsightsFile(t *testing.T) {
 func TestIsActive(t *testing.T) {
 	tests := []struct {
 		name             string
-		payloadData      any
+		payload          data.Payload
 		expectedResult   gemara.Result
 		expectedMessage  string
 		assertionMessage string
 	}{
 		{
 			name: "Active repository",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -193,7 +191,7 @@ func TestIsActive(t *testing.T) {
 		},
 		{
 			name: "Inactive repository",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -208,7 +206,7 @@ func TestIsActive(t *testing.T) {
 		},
 		{
 			name: "Empty status",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -223,7 +221,6 @@ func TestIsActive(t *testing.T) {
 		},
 		{
 			name:             "Malformed payload type",
-			payloadData:      "not a payload",
 			expectedResult:   gemara.Unknown,
 			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
 			assertionMessage: "Should return Unknown for wrong payload type",
@@ -231,7 +228,7 @@ func TestIsActive(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result, message, _ := IsActive(tt.payloadData)
+		result, message, _ := IsActive(tt.payload)
 		assert.Equal(t, tt.expectedResult, result, tt.assertionMessage)
 		assert.Equal(t, tt.expectedMessage, message, tt.assertionMessage)
 	}

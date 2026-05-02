@@ -3,14 +3,10 @@ package access_control
 import (
 	"github.com/gemaraproj/go-gemara"
 
-	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
+	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
-func BranchProtectionRestrictsPushes(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
+func BranchProtectionRestrictsPushes(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	protectionData := payload.Repository.DefaultBranchRef.BranchProtectionRule
 
 	if protectionData.RestrictsPushes {
@@ -34,12 +30,7 @@ func BranchProtectionRestrictsPushes(payloadData any) (result gemara.Result, mes
 	return result, message, confidence
 }
 
-func BranchProtectionPreventsDeletion(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func BranchProtectionPreventsDeletion(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	branchProtectionAllowsDeletion := payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions
 	deletionRule := payload.RepositoryMetadata.IsDefaultBranchProtectedFromDeletion()
 	branchRulesAllowDeletion := deletionRule == nil || !*deletionRule
@@ -58,12 +49,7 @@ func BranchProtectionPreventsDeletion(payloadData any) (result gemara.Result, me
 	return result, message, confidence
 }
 
-func WorkflowDefaultReadPermissions(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func WorkflowDefaultReadPermissions(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	permissions := payload.WorkflowPermissions
 	if !payload.WorkflowsEnabled {
 		return gemara.NeedsReview, "GitHub Actions is disabled for this repository; manual review required.", confidence

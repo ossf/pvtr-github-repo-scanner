@@ -99,16 +99,16 @@ func TestCicdSanitizedInputParameters(t *testing.T) {
 func TestVariableExtraction(t *testing.T) {
 
 	var testScript = `echo ${{github.event.issue.title }}
-		if ${{ github.event.commits.arbitrary.data.message}} -ne 0
+		if ${{ github.event.commits.arbitrary.payload.message}} -ne 0
 		then
-			echo "Checkout report image" ${{ githubnodotevent.commits.arbitrary.data.message}}
+			echo "Checkout report image" ${{ githubnodotevent.commits.arbitrary.payload.message}}
 			run: docker pull the pvt-r-github-repo image
 		fi`
 
 	varNames := pullVariablesFromScript(testScript)
 
 	assert.Equal(t, slices.Contains(varNames, "github.event.issue.title"), true, "Variable extraction failed")
-	assert.Equal(t, slices.Contains(varNames, "github.event.commits.arbitrary.data.message"), true, "Variable extraction failed")
+	assert.Equal(t, slices.Contains(varNames, "github.event.commits.arbitrary.payload.message"), true, "Variable extraction failed")
 
 }
 
@@ -148,7 +148,7 @@ func TestInsecureURI(t *testing.T) {
 func TestUnTrustedVarsRegex(t *testing.T) {
 
 	assert.True(t, untrustedVars.Match([]byte("github.event.issue.title")), "regex match failed")
-	assert.True(t, untrustedVars.Match([]byte("github.event.commits.arbitrary.data.message")), "regex match failed")
+	assert.True(t, untrustedVars.Match([]byte("github.event.commits.arbitrary.payload.message")), "regex match failed")
 }
 
 var branchNameBadWorkflowFile = `name: Deploy on push
