@@ -121,6 +121,9 @@ func (p *Payload) getTree() (*GraphqlRepoTree, error) {
 	if p.cachedTree != nil {
 		return p.cachedTree, nil
 	}
+	if p.GraphqlRepoData == nil || p.Config == nil {
+		return nil, fmt.Errorf("payload missing required repository data")
+	}
 	tree, err := fetchGraphqlRepoTree(p.Config, p.client, p.Repository.DefaultBranchRef.Name)
 	if err != nil {
 		return nil, err
