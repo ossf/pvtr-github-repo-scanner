@@ -127,7 +127,9 @@ func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message strin
 func NoUnreviewableBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	unreviewableBinaries, err := payload.GetUnreviewableBinaries()
 	if err != nil {
-		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
+		if payload.Config != nil && payload.Config.Logger != nil {
+			payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
+		}
 		return gemara.Unknown, "Error while scanning repository for unreviewable binaries, potentially due to repo size. See logs for details.", confidence
 	}
 

@@ -19,11 +19,6 @@ func Test_HasDesignDocumentation(t *testing.T) {
 		wantMsg    string
 	}{
 		{
-			name:       "malformed payload",
-			wantResult: gemara.Unknown,
-			wantMsg:    "",
-		},
-		{
 			name: "nil data returns failed",
 			payload: data.Payload{
 				GraphqlRepoData: nil,

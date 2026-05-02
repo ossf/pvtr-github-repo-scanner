@@ -198,11 +198,6 @@ func TestGoodLicense(t *testing.T) {
 		expectedMessage string
 	}{
 		{
-			name:            "Invalid payload",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid)",
-		},
-		{
 			name: "No license identifiers found",
 			payload: data.Payload{
 				GraphqlRepoData: &data.GraphqlRepoData{},

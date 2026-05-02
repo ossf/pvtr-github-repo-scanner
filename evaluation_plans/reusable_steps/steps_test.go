@@ -100,12 +100,6 @@ func TestIsCodeRepo(t *testing.T) {
 			expectedMessage:  "Repository does not contain code",
 			assertionMessage: "Should be not applicable when IsCodeRepo is false",
 		},
-		{
-			name:             "Malformed payload type",
-			expectedResult:   gemara.Unknown,
-			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
-			assertionMessage: "Should return Unknown for wrong payload type",
-		},
 	}
 
 	for _, tt := range tests {
@@ -151,12 +145,6 @@ func TestHasSecurityInsightsFile(t *testing.T) {
 			expectedResult:   gemara.NeedsReview,
 			expectedMessage:  "Security insights required for this assessment, but file not found",
 			assertionMessage: "Should need review when security insights file URL is empty",
-		},
-		{
-			name:             "Malformed payload type",
-			expectedResult:   gemara.Unknown,
-			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
-			assertionMessage: "Should return Unknown for wrong payload type",
 		},
 	}
 
@@ -218,12 +206,6 @@ func TestIsActive(t *testing.T) {
 			expectedResult:   gemara.NotApplicable,
 			expectedMessage:  "Repo Status is ",
 			assertionMessage: "Should be not applicable when repository status is empty",
-		},
-		{
-			name:             "Malformed payload type",
-			expectedResult:   gemara.Unknown,
-			expectedMessage:  "Malformed assessment: expected payload type data.Payload, got string (not a payload)",
-			assertionMessage: "Should return Unknown for wrong payload type",
 		},
 	}
 

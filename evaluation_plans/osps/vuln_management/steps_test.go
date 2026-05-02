@@ -146,11 +146,6 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 				GraphqlRepoData: &data.GraphqlRepoData{},
 			},
 		},
-		{
-			name:            "Invalid payload",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid_payload)",
-		},
 	}
 
 	for _, test := range tests {
@@ -263,11 +258,6 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 				},
 				GraphqlRepoData: &data.GraphqlRepoData{},
 			},
-		},
-		{
-			name:            "Invalid payload",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid_payload)",
 		},
 	}
 
