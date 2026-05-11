@@ -47,6 +47,7 @@ checksum:
 
 release:
   prerelease: auto
+  disable: true
 
 sboms:
   - # ID of the sbom config, must be unique.
