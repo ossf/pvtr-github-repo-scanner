@@ -10,6 +10,7 @@ jobs:
     permissions:
       contents: write       # Create release and push tags
       pull-requests: read   # Read PR labels for release-drafter
+      packages: write       # Push container image to ghcr.io
       id-token: write       # Federate for artifact attestation
       attestations: write   # Generate artifact attestations
     uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@592067a69a43d2285f933753d89a7c9d51b96530 # v1.0.0
@@ -18,6 +19,8 @@ jobs:
       release-config-name: release-drafter.yml
       goreleaser-config-path: .goreleaser.yaml
       go-version-file: go.mod
+      image-name: ${{ github.repository }}
       create-attestation: true
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
+      image-registry-password: ${{ secrets.GITHUB_TOKEN }}
