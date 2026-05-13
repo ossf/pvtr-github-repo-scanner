@@ -76,7 +76,7 @@ func Test_InsightsListsRepositories(t *testing.T) {
 
 func Test_NoUnreviewableBinariesInRepo(t *testing.T) {
 	t.Run("invalid payload returns unknown", func(t *testing.T) {
-		result, msg, _ := NoUnreviewableBinariesInRepo("not a payload")
+		result, msg, _ := NoUnreviewableBinariesInRepo(data.Payload{})
 		if result != gemara.Unknown {
 			t.Errorf("result = %v, want Unknown", result)
 		}

@@ -4,8 +4,7 @@ import (
 	"strings"
 
 	"github.com/gemaraproj/go-gemara"
-
-	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
+	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
 // DesignDocFiles are common file names for design/architecture documentation
@@ -20,25 +19,20 @@ var DesignDocFiles = []string{
 
 // DesignDocDirectories are common directory names that typically contain design documentation
 var DesignDocDirectories = []string{
-    "adr",
-    "adrs",
+	"adr",
+	"adrs",
 	"architecture",
 	"design",
 	"docs",
 	"doc",
 }
 
-func HasDesignDocumentation(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	data, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	var foundDirectories []string
 
 	// Check for design documentation files and directories in repository root
-	if data.GraphqlRepoData != nil {
-		for _, entry := range data.Repository.Object.Tree.Entries {
+	if payload.GraphqlRepoData != nil {
+		for _, entry := range payload.Repository.Object.Tree.Entries {
 			// Check for design doc files (blobs only)
 			if entry.Type == "blob" {
 				for _, designFile := range DesignDocFiles {
@@ -65,7 +59,7 @@ func HasDesignDocumentation(payloadData any) (result gemara.Result, message stri
 	}
 
 	// Fallback: check if DetailedGuide is specified in Security Insights
-	if data.RestData != nil && data.Insights.Project.Documentation.DetailedGuide != nil {
+	if payload.RestData != nil && payload.Insights.Project.Documentation.DetailedGuide != nil {
 		return gemara.NeedsReview, "No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors", confidence
 	}
 

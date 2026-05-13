@@ -4,40 +4,22 @@ import (
 	"fmt"
 
 	"github.com/gemaraproj/go-gemara"
-
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
-func VerifyPayload(payloadData any) (payload data.Payload, message string) {
-	payload, ok := payloadData.(data.Payload)
-	if !ok {
-		message = fmt.Sprintf("Malformed assessment: expected payload type %T, got %T (%v)", data.Payload{}, payloadData, payloadData)
-	}
-	return
-}
-
-func NotImplemented(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+func NotImplemented(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	return gemara.NotRun, "Not implemented", confidence
 }
 
-func GithubBuiltIn(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	_, message = VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func GithubBuiltIn(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	return gemara.Passed, "This control is enforced by GitHub for all projects", confidence
 }
 
-func GithubTermsOfService(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+func GithubTermsOfService(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	return gemara.Passed, "This control is satisfied by the GitHub Terms of Service", confidence
 }
 
-func HasSecurityInsightsFile(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
+func HasSecurityInsightsFile(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.InsightsError {
 		return gemara.NeedsReview, "An error was encountered while parsing Security Insights content", confidence
 	}
@@ -48,12 +30,7 @@ func HasSecurityInsightsFile(payloadData any) (result gemara.Result, message str
 	return gemara.Passed, "Security insights file found", confidence
 }
 
-func HasMadeReleases(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func HasMadeReleases(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if len(payload.Releases) == 0 {
 		return gemara.NotApplicable, "No releases found", confidence
 	}
@@ -61,12 +38,7 @@ func HasMadeReleases(payloadData any) (result gemara.Result, message string, con
 	return gemara.Passed, fmt.Sprintf("Found %v releases", len(payload.Releases)), confidence
 }
 
-func IsActive(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func IsActive(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.Insights.Repository.Status == "active" {
 		result = gemara.Passed
 	} else {
@@ -76,30 +48,20 @@ func IsActive(payloadData any) (result gemara.Result, message string, confidence
 	return result, fmt.Sprintf("Repo Status is %s", payload.Insights.Repository.Status), confidence
 }
 
-func HasIssuesOrDiscussionsEnabled(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	data, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
-	if data.Repository.HasDiscussionsEnabled && data.Repository.HasIssuesEnabled {
+func HasIssuesOrDiscussionsEnabled(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if payload.Repository.HasDiscussionsEnabled && payload.Repository.HasIssuesEnabled {
 		return gemara.Passed, "Both issues and discussions are enabled for the repository", confidence
 	}
-	if data.Repository.HasDiscussionsEnabled {
+	if payload.Repository.HasDiscussionsEnabled {
 		return gemara.Passed, "Discussions are enabled for the repository", confidence
 	}
-	if data.Repository.HasIssuesEnabled {
+	if payload.Repository.HasIssuesEnabled {
 		return gemara.Passed, "Issues are enabled for the repository", confidence
 	}
 	return gemara.Failed, "Both issues and discussions are disabled for the repository", confidence
 }
 
-func HasDependencyManagementPolicy(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func HasDependencyManagementPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.Insights.Repository.Documentation.DependencyManagementPolicy != nil {
 		return gemara.Passed, "Found dependency management policy in documentation", confidence
 	}
@@ -107,12 +69,7 @@ func HasDependencyManagementPolicy(payloadData any) (result gemara.Result, messa
 	return gemara.Failed, "No dependency management file found", confidence
 }
 
-func IsCodeRepo(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	payload, message := VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
+func IsCodeRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if !payload.IsCodeRepo {
 		return gemara.NotApplicable, "Repository does not contain code", confidence
 	}

@@ -5,9 +5,8 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	"github.com/ossf/si-tooling/v2/si"
-
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/si-tooling/v2/si"
 )
 
 func ptrTo[T any](v T) *T { return &v }
@@ -15,16 +14,10 @@ func ptrTo[T any](v T) *T { return &v }
 func Test_HasDesignDocumentation(t *testing.T) {
 	tests := []struct {
 		name       string
-		payload    any
+		payload    data.Payload
 		wantResult gemara.Result
 		wantMsg    string
 	}{
-		{
-			name:       "malformed payload",
-			payload:    "not a payload",
-			wantResult: gemara.Unknown,
-			wantMsg:    "",
-		},
 		{
 			name: "nil data returns failed",
 			payload: data.Payload{

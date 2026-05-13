@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,13 +27,13 @@ func stubGraphqlRepo(licenseUrl string) *data.GraphqlRepoData {
 func TestReleasesLicensed(t *testing.T) {
 	tests := []struct {
 		name            string
-		payloadData     any
+		payload         data.Payload
 		expectedResult  gemara.Result
 		expectedMessage string
 	}{
 		{
 			name: "No releases found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Releases: []data.ReleaseData{},
 				},
@@ -43,7 +43,7 @@ func TestReleasesLicensed(t *testing.T) {
 		},
 		{
 			name: "No licenses found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Releases: []data.ReleaseData{
 						{
@@ -58,7 +58,7 @@ func TestReleasesLicensed(t *testing.T) {
 		},
 		{
 			name: "Has releases and license",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Releases: []data.ReleaseData{
 						{
@@ -75,7 +75,7 @@ func TestReleasesLicensed(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, message, _ := ReleasesLicensed(test.payloadData)
+			result, message, _ := ReleasesLicensed(test.payload)
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
 		})
@@ -191,21 +191,15 @@ func TestSplitSpdxExpression(t *testing.T) {
 func TestGoodLicense(t *testing.T) {
 	tests := []struct {
 		name            string
-		payloadData     any
+		payload         data.Payload
 		apiResponse     []byte
 		apiError        error
 		expectedResult  gemara.Result
 		expectedMessage string
 	}{
 		{
-			name:            "Invalid payload",
-			payloadData:     "invalid",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid)",
-		},
-		{
 			name: "No license identifiers found",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				Config:          &config.Config{},
 			},
@@ -216,7 +210,7 @@ func TestGoodLicense(t *testing.T) {
 		},
 		{
 			name: "OSI approved license (MIT)",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				GraphqlRepoData: func() *data.GraphqlRepoData {
 					repo := stubGraphqlRepo("")
 					repo.Repository.LicenseInfo.SpdxId = "MIT"
@@ -231,7 +225,7 @@ func TestGoodLicense(t *testing.T) {
 		},
 		{
 			name: "Non-approved license",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				GraphqlRepoData: func() *data.GraphqlRepoData {
 					repo := stubGraphqlRepo("")
 					repo.Repository.LicenseInfo.SpdxId = "BadLicense"
@@ -246,7 +240,7 @@ func TestGoodLicense(t *testing.T) {
 		},
 		{
 			name: "Multiple licenses with mixed approval",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				GraphqlRepoData: func() *data.GraphqlRepoData {
 					repo := stubGraphqlRepo("")
 					repo.Repository.LicenseInfo.SpdxId = "MIT AND BadLicense"
@@ -261,7 +255,7 @@ func TestGoodLicense(t *testing.T) {
 		},
 		{
 			name: "Unknown license ID",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				GraphqlRepoData: func() *data.GraphqlRepoData {
 					repo := stubGraphqlRepo("")
 					repo.Repository.LicenseInfo.SpdxId = "UnknownLicense"
@@ -278,12 +272,10 @@ func TestGoodLicense(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if payload, ok := test.payloadData.(data.Payload); ok {
-				payload = data.NewPayloadWithHTTPMock(payload, test.apiResponse, 200, test.apiError)
-				test.payloadData = payload
-			}
+			data := data.NewPayloadWithHTTPMock(test.payload, test.apiResponse, 200, test.apiError)
+			test.payload = data
 
-			result, message, _ := GoodLicense(test.payloadData)
+			result, message, _ := GoodLicense(test.payload)
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
 		})

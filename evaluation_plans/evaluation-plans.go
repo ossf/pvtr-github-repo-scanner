@@ -1,7 +1,6 @@
 package evaluation_plans
 
 import (
-	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/osps/access_control"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/osps/build_release"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/osps/docs"
@@ -18,7 +17,7 @@ var (
 	// OSPS contains assessment step implementations for OSPS Baseline controls.
 	// Each catalog YAML defines which IDs are active for that version,
 	// so the SDK only runs the relevant subset.
-	OSPS = map[string][]gemara.AssessmentStep{
+	OSPS = map[string][]TypedStep{
 		"OSPS-AC-01.01": {
 			reusable_steps.GithubBuiltIn,
 		},
@@ -245,23 +244,3 @@ var (
 		},
 	}
 )
-
-// AllSteps merges all step maps into a single map for registration with the SDK.
-// Assessment IDs are unique across catalogs (e.g., OSPS-* vs CRA-*), so the
-// catalog YAML naturally filters to the correct subset at evaluation time.
-// To add a new catalog family, define its step map and include it here.
-//
-// A single shared map is safe across catalog versions because the OSPS
-// maintenance policy (https://github.com/ossf/security-baseline/blob/main/docs/maintenance.md#identifiers)
-// guarantees that substantive changes to a control result in a new identifier.
-// This means implementations for a given assessment ID will not diverge between
-// versions, so all versions can share the same step function for the same key.
-func AllSteps() map[string][]gemara.AssessmentStep {
-	merged := make(map[string][]gemara.AssessmentStep, len(OSPS))
-	for id, steps := range OSPS {
-		merged[id] = steps
-	}
-	// Add additional catalog step maps here, e.g.:
-	// for id, steps := range CRA { merged[id] = steps }
-	return merged
-}

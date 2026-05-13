@@ -14,9 +14,9 @@ type FakeRepositoryMetadata struct {
 
 type FakeBranchRuleMetadata struct {
 	data.RepositoryMetadata
-	defaultBranchProtected     *bool
-	requiresPRReviews          *bool
-	protectedFromDeletion      *bool
+	defaultBranchProtected *bool
+	requiresPRReviews      *bool
+	protectedFromDeletion  *bool
 }
 
 func (f *FakeBranchRuleMetadata) IsDefaultBranchProtected() *bool {
@@ -133,7 +133,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 		{
 			name: "branch protection restricts pushes",
 			payload: data.Payload{
-				GraphqlRepoData: &data.GraphqlRepoData{},
+				GraphqlRepoData:    &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{},
 			},
 			wantResult:  gemara.Passed,
@@ -142,7 +142,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 		{
 			name: "branch protection requires approving reviews",
 			payload: data.Payload{
-				GraphqlRepoData: &data.GraphqlRepoData{},
+				GraphqlRepoData:    &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{},
 			},
 			wantResult:  gemara.Passed,
@@ -151,7 +151,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 		{
 			name: "no branch protection but ruleset protects default branch",
 			payload: data.Payload{
-				GraphqlRepoData:    &data.GraphqlRepoData{},
+				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &trueVal,
 				},
@@ -162,7 +162,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 		{
 			name: "no branch protection but ruleset requires PR reviews",
 			payload: data.Payload{
-				GraphqlRepoData:    &data.GraphqlRepoData{},
+				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &falseVal,
 					requiresPRReviews:      &trueVal,
@@ -174,7 +174,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 		{
 			name: "no branch protection and no ruleset protection",
 			payload: data.Payload{
-				GraphqlRepoData:    &data.GraphqlRepoData{},
+				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &falseVal,
 					requiresPRReviews:      &falseVal,

@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	"github.com/ossf/si-tooling/v2/si"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/si-tooling/v2/si"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +14,7 @@ func ptrTo[T any](v T) *T { return &v }
 type testingData struct {
 	expectedResult   gemara.Result
 	expectedMessage  string
-	payloadData      interface{}
+	payload          data.Payload
 	assertionMessage string
 }
 
@@ -25,7 +25,7 @@ func TestSastToolDefined(t *testing.T) {
 			expectedResult:   gemara.Passed,
 			expectedMessage:  "Static Application Security Testing documented in Security Insights",
 			assertionMessage: "Test for SAST integration enabled",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -48,7 +48,7 @@ func TestSastToolDefined(t *testing.T) {
 			expectedResult:   gemara.Failed,
 			expectedMessage:  "No Static Application Security Testing documented in Security Insights",
 			assertionMessage: "Test for SAST integration present but not explicitly enabled",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -68,7 +68,7 @@ func TestSastToolDefined(t *testing.T) {
 			expectedResult:   gemara.Failed,
 			expectedMessage:  "No Static Application Security Testing documented in Security Insights",
 			assertionMessage: "Test for Non SAST tool defined",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -88,7 +88,7 @@ func TestSastToolDefined(t *testing.T) {
 			expectedResult:   gemara.Failed,
 			expectedMessage:  "No Static Application Security Testing documented in Security Insights",
 			assertionMessage: "Test for no tools defined",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Repository: &si.Repository{
@@ -101,7 +101,7 @@ func TestSastToolDefined(t *testing.T) {
 	}
 
 	for _, test := range testData {
-		result, message, _ := SastToolDefined(test.payloadData)
+		result, message, _ := SastToolDefined(test.payload)
 
 		assert.Equal(t, test.expectedResult, result, test.assertionMessage)
 		assert.Equal(t, test.expectedMessage, message, test.assertionMessage)
@@ -112,7 +112,7 @@ func TestSastToolDefined(t *testing.T) {
 func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 	tests := []struct {
 		name            string
-		payloadData     any
+		payload         data.Payload
 		expectedResult  gemara.Result
 		expectedMessage string
 	}{
@@ -120,7 +120,7 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 			name:            "Vulnerability disclosure policy present",
 			expectedResult:  gemara.Passed,
 			expectedMessage: "Vulnerability disclosure policy was specified in Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{
@@ -137,7 +137,7 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 			name:            "Vulnerability disclosure policy missing",
 			expectedResult:  gemara.Failed,
 			expectedMessage: "Vulnerability disclosure policy was NOT specified in Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{},
@@ -146,17 +146,11 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 				GraphqlRepoData: &data.GraphqlRepoData{},
 			},
 		},
-		{
-			name:            "Invalid payload",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid_payload)",
-			payloadData:     "invalid_payload",
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, message, _ := HasVulnerabilityDisclosurePolicy(test.payloadData)
+			result, message, _ := HasVulnerabilityDisclosurePolicy(test.payload)
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
 		})
@@ -166,7 +160,7 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 	tests := []struct {
 		name            string
-		payloadData     any
+		payload         data.Payload
 		expectedResult  gemara.Result
 		expectedMessage string
 	}{
@@ -174,7 +168,7 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 			name:            "Private reporting via vulnerability contact email",
 			expectedResult:  gemara.Passed,
 			expectedMessage: "Private vulnerability reporting available via dedicated contact email in Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{
@@ -194,7 +188,7 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 			name:            "Private reporting via security champions",
 			expectedResult:  gemara.Passed,
 			expectedMessage: "Private vulnerability reporting available via security champions contact in Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{
@@ -222,7 +216,7 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 			name:            "Reports not accepted",
 			expectedResult:  gemara.Failed,
 			expectedMessage: "Project does not accept vulnerability reports according to Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{
@@ -242,7 +236,7 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 			name:            "No contact methods available",
 			expectedResult:  gemara.Failed,
 			expectedMessage: "No private vulnerability reporting contact method found in Security Insights data",
-			payloadData: data.Payload{
+			payload: data.Payload{
 				RestData: &data.RestData{
 					Insights: si.SecurityInsights{
 						Project: &si.Project{
@@ -265,17 +259,11 @@ func TestHasPrivateVulnerabilityReporting(t *testing.T) {
 				GraphqlRepoData: &data.GraphqlRepoData{},
 			},
 		},
-		{
-			name:            "Invalid payload",
-			expectedResult:  gemara.Unknown,
-			expectedMessage: "Malformed assessment: expected payload type data.Payload, got string (invalid_payload)",
-			payloadData:     "invalid_payload",
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, message, _ := HasPrivateVulnerabilityReporting(test.payloadData)
+			result, message, _ := HasPrivateVulnerabilityReporting(test.payload)
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
 		})

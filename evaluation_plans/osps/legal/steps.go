@@ -7,7 +7,6 @@ import (
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
-	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 )
 
 type LicenseList struct {
@@ -23,10 +22,10 @@ type License struct {
 
 const spdxURL = "https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json"
 
-func getLicenseList(data data.Payload, makeApiCall func(string, bool) ([]byte, error)) (LicenseList, string) {
+func getLicenseList(payload data.Payload, makeApiCall func(string, bool) ([]byte, error)) (LicenseList, string) {
 	GoodLicenseList := LicenseList{}
 	if makeApiCall == nil {
-		makeApiCall = data.MakeApiCall
+		makeApiCall = payload.MakeApiCall
 	}
 	response, err := makeApiCall(spdxURL, false)
 	if err != nil {
@@ -51,46 +50,32 @@ func splitSpdxExpression(expression string) (spdx_ids []string) {
 	return
 }
 
-func FoundLicense(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	data, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-	if data.Repository.LicenseInfo.Url == "" {
+func FoundLicense(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if payload.Repository.LicenseInfo.Url == "" {
 		return gemara.Failed, "License was not found in a well known location via the GitHub API", confidence
 	}
 	return gemara.Passed, "License was found in a well known location via the GitHub API", confidence
 }
 
-func ReleasesLicensed(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	data, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
-	if len(data.Releases) == 0 {
+func ReleasesLicensed(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if len(payload.Releases) == 0 {
 		return gemara.NotApplicable, "No releases found", confidence
 	}
-	if data.Repository.LicenseInfo.Url == "" {
+	if payload.Repository.LicenseInfo.Url == "" {
 		return gemara.Failed, "License was not found in a well known location via the GitHub API", confidence
 	}
 	return gemara.Passed, "GitHub releases include the license(s) in the released source code.", confidence
 }
 
-func GoodLicense(payloadData any) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	data, message := reusable_steps.VerifyPayload(payloadData)
-	if message != "" {
-		return gemara.Unknown, message, confidence
-	}
-
-	licenses, errString := getLicenseList(data, nil)
+func GoodLicense(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	licenses, errString := getLicenseList(payload, nil)
 
 	if errString != "" {
 		return gemara.Unknown, errString, confidence
 	}
 
-	apiInfo := data.Repository.LicenseInfo.SpdxId
-	siInfo := data.Insights.Repository.License.Expression
+	apiInfo := payload.Repository.LicenseInfo.SpdxId
+	siInfo := payload.Insights.Repository.License.Expression
 	if apiInfo == "" && siInfo == "" {
 		return gemara.Failed, "License SPDX identifier was not found in Security Insights data or via GitHub API", confidence
 	}
@@ -117,9 +102,9 @@ func GoodLicense(payloadData any) (result gemara.Result, message string, confide
 		}
 	}
 	approvedLicenses := strings.Join(spdx_ids, ", ")
-	if data.Config.Logger != nil {
-		data.Config.Logger.Trace(fmt.Sprintf("Requested licenses: %s", approvedLicenses))
-		data.Config.Logger.Trace(fmt.Sprintf("Non-approved licenses: %s", badLicenses))
+	if payload.Config.Logger != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("Requested licenses: %s", approvedLicenses))
+		payload.Config.Logger.Trace(fmt.Sprintf("Non-approved licenses: %s", badLicenses))
 	}
 
 	if len(badLicenses) > 0 {

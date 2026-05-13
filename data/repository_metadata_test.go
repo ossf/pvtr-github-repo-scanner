@@ -36,7 +36,7 @@ func TestLoadRepositoryMetadata(t *testing.T) {
 				mock.WithRequestMatch(
 					mock.GetOrgsByOrg,
 					github.Organization{
-						Login:                       github.Ptr("test-owner"),
+						Login: github.Ptr("test-owner"),
 					},
 				),
 			},
@@ -59,7 +59,7 @@ func TestLoadRepositoryMetadata(t *testing.T) {
 			_, repoMetadata, err := loadRepositoryMetadata(ghClient, testCase.owner, testCase.repo)
 			if testCase.expectedRepoError {
 				assert.Error(t, err)
-		} else {
+			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, repoMetadata)
 				assert.True(t, repoMetadata.IsActive())
