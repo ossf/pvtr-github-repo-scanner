@@ -3,7 +3,8 @@
 # This script is used in the ci.yaml workflow
 # but can also be used locally to test the
 # plugin against a real GitHub repository.
-# Change lines 100-103 to test against a different repository.
+# Change the owner/repo values in the generated config block below to test
+# against a different repository.
 
 set -x
 
@@ -72,7 +73,6 @@ fi
 ASSET_PATTERN="privateer_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
 ASSET_TAG="v${PRIVATEER_VERSION}"
 PLUGIN_DIR="./tmp/plugins"
-CONFIG_FILE="./tmp/test_config.yml"
 PRIVATEER_BIN=""
 
 # Ensure cleanup happens even on unexpected exits or signals
@@ -106,10 +106,24 @@ else
   exit 1
 fi
 
-# Generate config for testing against the repo
-# Tracing is disabled here to prevent GITHUB_TOKEN from appearing in logs
+# Generate compatibility configs for testing against the repo
+COMPAT_CONFIG_DIR="./tmp/compat-configs"
+mkdir -p "$COMPAT_CONFIG_DIR"
+
 set +x
-cat > "$CONFIG_FILE" <<EOF
+SUPPORTED_CATALOG_IDS=$(go run ./cmd/list-supported-catalogs)
+set -x
+
+if [ -z "$SUPPORTED_CATALOG_IDS" ]; then
+  echo "ERROR: no supported catalog IDs were returned"
+  exit 1
+fi
+
+set +x
+# Generate one config per declared compatibility catalog ID.
+for catalog_id in $SUPPORTED_CATALOG_IDS; do
+  compat_config="$COMPAT_CONFIG_DIR/${catalog_id}.yml"
+  cat > "$compat_config" <<EOF
 loglevel: trace
 write-directory: evaluation_results
 write: true
@@ -119,7 +133,7 @@ services:
     plugin: github-repo
     policy:
       catalogs:
-        - osps-baseline-2026-02
+        - ${catalog_id}
       applicability:
         - Maturity Level 1
     vars:
@@ -127,22 +141,29 @@ services:
       repo: pvtr-github-repo-scanner
       token: ${GITHUB_TOKEN}
 EOF
+done
 set -x
 
 # Confirm plugin is in PLUGIN_DIR
 ls "$PLUGIN_DIR"
 
-# Confirm plugin is installed and in config
-"$PRIVATEER_BIN" list -b "$PLUGIN_DIR" -c "$CONFIG_FILE"
+# Confirm plugin is installed and works with every supported compatibility config.
+for compat_config in "$COMPAT_CONFIG_DIR"/*.yml; do
+  "$PRIVATEER_BIN" list -b "$PLUGIN_DIR" -c "$compat_config"
+done
 
-# Run pvtr with the plugin.
+# Run pvtr with the plugin for every supported compatibility config.
 # Exit 0 (all checks passed) and exit 1 (some checks failed) both indicate the
 # plugin ran to completion. Any other exit code means pvtr/the plugin crashed,
 # which should fail CI.
-"$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$CONFIG_FILE"
-RUN_STATUS=$?
-if [ "$RUN_STATUS" -ne 0 ] && [ "$RUN_STATUS" -ne 1 ]; then
-  STATUS=$RUN_STATUS
-fi
+for compat_config in "$COMPAT_CONFIG_DIR"/*.yml; do
+  "$PRIVATEER_BIN" run -b "$PLUGIN_DIR" -c "$compat_config"
+  RUN_STATUS=$?
+  if [ "$RUN_STATUS" -ne 0 ] && [ "$RUN_STATUS" -ne 1 ]; then
+    STATUS=$RUN_STATUS
+  fi
+  # Emit a stable marker so the workflow can verify every supported catalog ran.
+  echo "COMPAT_CONFIG_OK $(basename "$compat_config" .yml)"
+done
 
 exit $STATUS

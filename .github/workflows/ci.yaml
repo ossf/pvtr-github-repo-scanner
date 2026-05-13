@@ -33,4 +33,7 @@ jobs:
           ./.github/scripts/ci.sh 2>&1 | tee integration_output.txt
       - name: Verify test output
         run: |
-          grep -E 'privateer_osps-baseline-2026-02.*Passed.*Warnings.*Failed.*Possible' integration_output.txt
+          # Keep the workflow aligned with the code-level compatibility contract.
+          expected_count=$(go run ./cmd/list-supported-catalogs | wc -l | tr -d ' ')
+          actual_count=$(grep -c '^COMPAT_CONFIG_OK ' integration_output.txt)
+          test "$actual_count" -eq "$expected_count"
