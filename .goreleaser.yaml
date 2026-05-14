@@ -13,12 +13,19 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  - binary: github-repo
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
       - windows
       - darwin
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.VersionPostfix=
+      - -X main.GitCommitHash={{.Commit}}
+      - -X main.BuiltAt={{.Date}}
 
 archives:
   - formats: ["tar.gz"]
@@ -35,18 +42,16 @@ archives:
       - goos: windows
         formats: ["zip"]
 
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-
 checksum:
   name_template: "checksums.txt"
 
+# release-drafter (via the ospo-reusable-workflows release.yaml) owns the
+# GitHub release and changelog. GoReleaser only builds and uploads artifacts.
 release:
-  prerelease: auto
+  disable: true
+
+changelog:
+  disable: true
 
 sboms:
   - # ID of the sbom config, must be unique.
@@ -56,16 +61,6 @@ sboms:
 
     # List of names of the SBOM documents created at this step
     # (relative to the dist dir).
-    #
-    # Each element configured is made available as variables. For example:
-    #   documents: ["foo", "bar"]
-    #
-    # would make the following variables that can be referenced as template keys:
-    #   document0: "foo"
-    #   document1: "bar"
-    #
-    # Note that multiple sbom values are only allowed if the value of
-    # "artifacts" is "any".
     #
     # Default:
     #   When "binary":   ["{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}.sbom.json"]
@@ -81,12 +76,6 @@ sboms:
     #
     # Default: 'syft'.
     cmd: syft
-
-    # Command line arguments for the command
-    #
-    # Default: ["$artifact", "--output", "spdx-json=$document", "--enrich", "all"].
-    # Templates: allowed.
-    # args: ["$artifact", "--output", "cyclonedx-json=$document"]
 
     # Which artifacts to catalog.
     #
@@ -105,3 +94,7 @@ sboms:
 
 universal_binaries:
   - replace: true
+    # Without name_template, replace: true would rename the universal binary
+    # to the ProjectName (pvtr-github-repo-scanner), breaking plugin discovery
+    # which expects the binary to be named "github-repo".
+    name_template: github-repo
