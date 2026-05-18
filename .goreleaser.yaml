@@ -36,17 +36,13 @@ archives:
         formats: ["zip"]
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  disable: true
 
 checksum:
   name_template: "checksums.txt"
 
 release:
-  prerelease: auto
+  disable: true
 
 sboms:
   - # ID of the sbom config, must be unique.
