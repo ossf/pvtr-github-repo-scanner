@@ -13,6 +13,7 @@ jobs:
       id-token: write       # release_goreleaser, release_image: attestation OIDC
       attestations: write   # release_goreleaser, release_image: build provenance
       packages: write       # release_image: push container image
+      discussions: write    # release_discussion: declared by reusable even when skipped
     uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@e92cb6053ace495fe40a5f185988557afcdcecbc # v1.0.1
     with:
       publish: true
