@@ -4,12 +4,12 @@ go 1.26.3
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.13
-	github.com/gemaraproj/go-gemara v0.4.0
+	github.com/gemaraproj/go-gemara v0.5.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/go-github/v74 v74.0.0
 	github.com/migueleliasweb/go-github-mock v1.5.0
 	github.com/ossf/si-tooling/v2 v2.2.0
-	github.com/privateerproj/privateer-sdk v1.24.0
+	github.com/privateerproj/privateer-sdk v1.24.2
 	github.com/rhysd/actionlint v1.7.12
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	golang.org/x/oauth2 v0.36.0
@@ -58,7 +58,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/gomarkdown/markdown v0.0.0-20250311123330-531bef5e742b
 	github.com/hashicorp/go-hclog v1.6.3
-	github.com/hashicorp/go-plugin v1.7.0 // indirect
+	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
