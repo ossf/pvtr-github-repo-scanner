@@ -9,7 +9,7 @@ require (
 	github.com/google/go-github/v74 v74.0.0
 	github.com/migueleliasweb/go-github-mock v1.5.0
 	github.com/ossf/si-tooling/v2 v2.2.0
-	github.com/privateerproj/privateer-sdk v1.24.2
+	github.com/privateerproj/privateer-sdk v1.28.0
 	github.com/rhysd/actionlint v1.7.12
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	golang.org/x/oauth2 v0.36.0
