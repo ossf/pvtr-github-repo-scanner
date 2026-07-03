@@ -20,17 +20,20 @@ type RepoSecurityPosture struct {
 }
 
 func buildSecurityPosture(repository *github.Repository, rd RestData) (SecurityPosture, error) {
+	insightsClaimsSecretsTooling := insightsClaimsSecretsTooling(rd.Insights)
 	securityConfig := repository.GetSecurityAndAnalysis()
 	if securityConfig == nil {
 		return &RepoSecurityPosture{
-			restData: rd,
+			restData:              rd,
+			preventsSecretPushing: insightsClaimsSecretsTooling,
+			scansForSecrets:       insightsClaimsSecretsTooling,
 		}, nil
 	}
 	secretsScanningStatus := securityConfig.GetSecretScanning().GetStatus()
-	insightsClaimsSecretsTooling := insightsClaimsSecretsTooling(rd.Insights)
+	pushProtectionStatus := securityConfig.GetSecretScanningPushProtection().GetStatus()
 	return &RepoSecurityPosture{
 		restData:              rd,
-		preventsSecretPushing: secretsScanningStatus == "enabled" || insightsClaimsSecretsTooling,
+		preventsSecretPushing: pushProtectionStatus == "enabled" || insightsClaimsSecretsTooling,
 		scansForSecrets:       secretsScanningStatus == "enabled" || insightsClaimsSecretsTooling,
 		// TODO: consider if SecurityInsights should have a policy doc field in ProjectDocumentation to handle this
 		// definesPolicyForHandlingSecrets: rd.SecurityInsights != nil && ....
@@ -38,7 +41,7 @@ func buildSecurityPosture(repository *github.Repository, rd RestData) (SecurityP
 }
 
 func insightsClaimsSecretsTooling(insights si.SecurityInsights) bool {
-	if insights.Repository.SecurityPosture.Tools == nil {
+	if insights.Repository == nil || insights.Repository.SecurityPosture.Tools == nil {
 		return false
 	}
 	for _, tool := range insights.Repository.SecurityPosture.Tools {
