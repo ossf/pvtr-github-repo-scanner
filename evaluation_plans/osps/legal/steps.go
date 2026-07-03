@@ -84,6 +84,7 @@ func GoodLicense(payload data.Payload) (result gemara.Result, message string, co
 	spdx_ids_b := splitSpdxExpression(siInfo)
 	spdx_ids := append(spdx_ids_a, spdx_ids_b...)
 	badLicenses := []string{}
+	deprecatedApproved := []string{}
 	for _, spdx_id := range spdx_ids {
 		if spdx_id == "" {
 			continue
@@ -92,8 +93,10 @@ func GoodLicense(payload data.Payload) (result gemara.Result, message string, co
 		for _, license := range licenses.Licenses {
 			if license.LicenseID == spdx_id {
 				validId = true
-				if (!license.IsOsiApproved && !license.IsFsfLibre) || license.IsDeprecatedLicenseId {
+				if !license.IsOsiApproved && !license.IsFsfLibre {
 					badLicenses = append(badLicenses, spdx_id)
+				} else if license.IsDeprecatedLicenseId {
+					deprecatedApproved = append(deprecatedApproved, spdx_id)
 				}
 			}
 		}
@@ -105,10 +108,14 @@ func GoodLicense(payload data.Payload) (result gemara.Result, message string, co
 	if payload.Config.Logger != nil {
 		payload.Config.Logger.Trace(fmt.Sprintf("Requested licenses: %s", approvedLicenses))
 		payload.Config.Logger.Trace(fmt.Sprintf("Non-approved licenses: %s", badLicenses))
+		payload.Config.Logger.Trace(fmt.Sprintf("Deprecated-but-approved licenses: %s", deprecatedApproved))
 	}
 
 	if len(badLicenses) > 0 {
 		return gemara.Failed, fmt.Sprintf("These licenses are not OSI or FSF approved: %s", strings.Join(badLicenses, ", ")), confidence
+	}
+	if len(deprecatedApproved) > 0 {
+		return gemara.Passed, fmt.Sprintf("All licenses found are OSI or FSF approved. Note: the following SPDX IDs are deprecated and should be migrated to their -only/-or-later form: %s", strings.Join(deprecatedApproved, ", ")), confidence
 	}
 	return gemara.Passed, "All license found are OSI or FSF approved", confidence
 }

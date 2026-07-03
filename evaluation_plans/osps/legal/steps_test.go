@@ -268,6 +268,66 @@ func TestGoodLicense(t *testing.T) {
 			expectedResult:  gemara.Failed,
 			expectedMessage: "These licenses are not OSI or FSF approved: UnknownLicense",
 		},
+		{
+			name: "Deprecated but OSI and FSF approved license (AGPL-3.0)",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "AGPL-3.0"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"AGPL-3.0","isOsiApproved":true,"isFsfLibre":true,"isDeprecatedLicenseId":true}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Passed,
+			expectedMessage: "All licenses found are OSI or FSF approved. Note: the following SPDX IDs are deprecated and should be migrated to their -only/-or-later form: AGPL-3.0",
+		},
+		{
+			name: "Mix of deprecated-approved and non-deprecated approved licenses",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "MIT AND AGPL-3.0"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"MIT","isOsiApproved":true,"isFsfLibre":false},{"licenseId":"AGPL-3.0","isOsiApproved":true,"isFsfLibre":true,"isDeprecatedLicenseId":true}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Passed,
+			expectedMessage: "All licenses found are OSI or FSF approved. Note: the following SPDX IDs are deprecated and should be migrated to their -only/-or-later form: AGPL-3.0",
+		},
+		{
+			name: "Mix of deprecated-approved and non-approved licenses",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "AGPL-3.0 AND BadLicense"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"AGPL-3.0","isOsiApproved":true,"isFsfLibre":true,"isDeprecatedLicenseId":true},{"licenseId":"BadLicense","isOsiApproved":false,"isFsfLibre":false}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Failed,
+			expectedMessage: "These licenses are not OSI or FSF approved: BadLicense",
+		},
+		{
+			name: "Deprecated and non-approved license fails",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "DeprecatedBadLicense"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"DeprecatedBadLicense","isOsiApproved":false,"isFsfLibre":false,"isDeprecatedLicenseId":true}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Failed,
+			expectedMessage: "These licenses are not OSI or FSF approved: DeprecatedBadLicense",
+		},
 	}
 
 	for _, test := range tests {
