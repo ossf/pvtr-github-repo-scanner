@@ -37,6 +37,9 @@ func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
 			SecretScanning: &github.SecretScanning{
 				Status: github.Ptr("enabled"),
 			},
+			SecretScanningPushProtection: &github.SecretScanningPushProtection{
+				Status: github.Ptr("enabled"),
+			},
 		},
 	}
 	rd := RestData{
@@ -48,6 +51,47 @@ func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, sp.PreventsPushingSecrets())
 	assert.True(t, sp.ScansForSecrets())
+}
+
+func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *testing.T) {
+	repo := &github.Repository{}
+	rd := RestData{
+		Insights: si.SecurityInsights{
+			Repository: &si.Repository{
+				SecurityPosture: si.SecurityPosture{
+					Tools: []si.SecurityTool{
+						{Type: "secret-scanning"},
+					},
+				},
+			},
+		},
+	}
+	sp, err := buildSecurityPosture(repo, rd)
+	assert.NoError(t, err)
+	assert.True(t, sp.PreventsPushingSecrets())
+	assert.True(t, sp.ScansForSecrets())
+}
+
+func TestBuildSecurityPosture_ScanningEnabledPushProtectionDisabled(t *testing.T) {
+	repo := &github.Repository{
+		SecurityAndAnalysis: &github.SecurityAndAnalysis{
+			SecretScanning: &github.SecretScanning{
+				Status: github.Ptr("enabled"),
+			},
+			SecretScanningPushProtection: &github.SecretScanningPushProtection{
+				Status: github.Ptr("disabled"),
+			},
+		},
+	}
+	rd := RestData{
+		Insights: si.SecurityInsights{
+			Repository: &si.Repository{},
+		},
+	}
+	sp, err := buildSecurityPosture(repo, rd)
+	assert.NoError(t, err)
+	assert.True(t, sp.ScansForSecrets())
+	assert.False(t, sp.PreventsPushingSecrets())
 }
 
 func TestBuildSecurityPosture_SecretScanningDisabledButInsightsTooling(t *testing.T) {
