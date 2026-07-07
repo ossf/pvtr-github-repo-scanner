@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/google/go-github/v74/github"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/shurcooL/githubv4"
@@ -14,6 +15,7 @@ import (
 type Payload struct {
 	*GraphqlRepoData
 	*RestData
+	Evidence                 *gemara.EvidenceCollector
 	Config                   *config.Config
 	RepositoryMetadata       RepositoryMetadata
 	DependencyManifestsCount int
@@ -22,6 +24,28 @@ type Payload struct {
 	client                   *githubv4.Client
 	httpClient               *http.Client
 	cachedTree               *GraphqlRepoTree
+}
+
+// AddEvidence, GetEvidence, and ClearEvidence satisfy gemara.HasEvidence with
+// nil-safe delegation, so the SDK harvests step-recorded evidence from any
+// Loader-built payload and a collector-less payload degrades to no evidence.
+func (p Payload) AddEvidence(evidence gemara.Evidence) {
+	if p.Evidence != nil {
+		p.Evidence.AddEvidence(evidence)
+	}
+}
+
+func (p Payload) GetEvidence() []gemara.Evidence {
+	if p.Evidence == nil {
+		return nil
+	}
+	return p.Evidence.GetEvidence()
+}
+
+func (p Payload) ClearEvidence() {
+	if p.Evidence != nil {
+		p.Evidence.ClearEvidence()
+	}
 }
 
 func Loader(config *config.Config) (payload any, err error) {
@@ -62,6 +86,7 @@ func Loader(config *config.Config) (payload any, err error) {
 	return any(Payload{
 		GraphqlRepoData:          graphql,
 		RestData:                 rest,
+		Evidence:                 &gemara.EvidenceCollector{},
 		Config:                   config,
 		RepositoryMetadata:       repositoryMetadata,
 		DependencyManifestsCount: dependencyManifestsCount,
