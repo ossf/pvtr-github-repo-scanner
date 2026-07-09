@@ -76,3 +76,14 @@ func IsCodeRepo(payload data.Payload) (result gemara.Result, message string, con
 
 	return gemara.Passed, "Repository contains code", confidence
 }
+
+// AIFallback logs why an AI-assisted assessment was abandoned and returns
+// NeedsReview with the supplied fallback message. Use this when an AI-assisted
+// step cannot complete (e.g. client construction failure, missing evidence,
+// provider error) and should degrade gracefully to manual review.
+func AIFallback(payload data.Payload, controlID string, fallbackMessage string, reason string, err error) (gemara.Result, string, gemara.ConfidenceLevel) {
+	if payload.Config != nil && payload.Config.Logger != nil {
+		payload.Config.Logger.Warn(controlID+": "+reason, "err", err)
+	}
+	return gemara.NeedsReview, fallbackMessage, 0
+}
