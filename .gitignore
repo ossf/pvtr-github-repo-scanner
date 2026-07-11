@@ -21,3 +21,6 @@ TODO.md
 
 # ignore ci testing folder
 tmp/
+
+# ignore local git worktrees
+.worktrees/
