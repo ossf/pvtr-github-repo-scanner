@@ -50,6 +50,27 @@ var (
 	// skip them for push-triggered workflows and avoid false positives.
 	pullRequestOnlyUnsafeBranchVars = regexp.MustCompile(`.*(github\.ref\b|` +
 		`github\.ref_name).*`)
+
+	// Refs that point at an untrusted code snapshot (a fork's PR head). Checking
+	// any of these out inside a privileged workflow causes untrusted code to run
+	// with the base repository's secrets and write token. Covers the PR head
+	// context (pull_request_target / issue_comment), the workflow_run head
+	// context, and the raw pull/<n>/head|merge refs used with git and the API.
+	untrustedHeadRef = regexp.MustCompile(
+		`github\.event\.pull_request\.head\.sha|` +
+			`github\.event\.pull_request\.head\.ref|` +
+			`github\.head_ref|` +
+			`github\.event\.workflow_run\.head_sha|` +
+			`github\.event\.workflow_run\.head_branch|` +
+			`(?:refs/)?pull/[^/]+/(?:head|merge)`)
+
+	// git commands that materialize code into the workspace. Used together with
+	// untrustedHeadRef so a benign `git checkout main` is not flagged.
+	gitCheckoutCommand = regexp.MustCompile(`(?i)\bgit\s+(?:checkout|switch|fetch)\b`)
+
+	// `gh pr checkout` always fetches and checks out the PR head, so it is
+	// dangerous on its own inside a privileged workflow.
+	ghPrCheckoutCommand = regexp.MustCompile(`(?i)\bgh\s+pr\s+checkout\b`)
 )
 
 // checkAllWorkflows verifies the payload, iterates over all workflow files, and
@@ -104,6 +125,109 @@ func CicdSanitizedInputParameters(payload data.Payload) (gemara.Result, string, 
 func CicdBranchNameSanitized(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
 	return checkAllWorkflows(payload, checkWorkflowFileForBranchNameUsage,
 		"GitHub Workflows do not use unsanitized branch names in run steps")
+}
+
+// CicdUntrustedCodeIsolation checks OSPS-BR-01.03: CI/CD pipelines that operate
+// on untrusted code snapshots must prevent access to privileged credentials.
+// It flags workflows that run with the base repository's secrets and write
+// token (pull_request_target, workflow_run, issue_comment) but then check out
+// an untrusted fork's code, which would expose those credentials to it.
+func CicdUntrustedCodeIsolation(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
+	return checkAllWorkflows(payload, checkWorkflowForUntrustedCodeAccess,
+		"No workflows were detected that grant untrusted code access to privileged credentials")
+}
+
+// privilegedUntrustedTriggers are workflow events that execute with the base
+// repository's secrets and write token but can be initiated by an untrusted
+// actor (a fork's pull request, or a comment). Running an untrusted code
+// snapshot in any of these contexts exposes privileged credentials.
+var privilegedUntrustedTriggers = map[string]bool{
+	"pull_request_target": true,
+	"workflow_run":        true,
+	"issue_comment":       true,
+}
+
+// checkWorkflowForUntrustedCodeAccess detects the "pwn request" family of
+// anti-patterns: a workflow running in a privileged context (see
+// privilegedUntrustedTriggers) that checks out an untrusted fork's code, giving
+// that code access to the base repository's secrets and write token. It flags
+// both actions/checkout of an untrusted head ref and equivalent checkouts
+// performed in run: steps (git checkout/fetch of a PR head, or gh pr checkout).
+//
+// TODO(OSPS-BR-01.03): extend coverage to the two remaining vectors, addressed
+// separately from this deterministic check:
+//   - workflow_run artifact/cache poisoning (privileged workflow downloading and
+//     then executing/trusting artifacts produced by the untrusted run). This is
+//     a contextual dataflow judgment, so it is planned as an AI-assisted
+//     escalation layer built on the sdkai seam once #346 merges.
+//   - untrusted fork execution on self-hosted runners. This depends on runner
+//     group / fork-secret settings that are not present in the workflow file, so
+//     it needs an API-backed data source rather than static analysis or AI.
+func checkWorkflowForUntrustedCodeAccess(workflow *actionlint.Workflow) (bool, string) {
+	var triggers []string
+	for _, event := range workflow.On {
+		if privilegedUntrustedTriggers[event.EventName()] {
+			triggers = append(triggers, event.EventName())
+		}
+	}
+	if len(triggers) == 0 {
+		return true, ""
+	}
+	trigger := strings.Join(triggers, ", ")
+
+	var message strings.Builder
+
+	for _, job := range workflow.Jobs {
+		if job == nil {
+			continue
+		}
+		for _, step := range job.Steps {
+			if step == nil {
+				continue
+			}
+			switch exec := step.Exec.(type) {
+			case *actionlint.ExecAction:
+				if exec.Uses == nil || !strings.HasPrefix(exec.Uses.Value, "actions/checkout@") {
+					continue
+				}
+				refInput, ok := exec.Inputs["ref"]
+				if !ok || refInput == nil || refInput.Value == nil {
+					continue
+				}
+				if untrustedHeadRef.MatchString(refInput.Value.Value) {
+					fmt.Fprintf(&message,
+						"%s workflow checks out untrusted code (%s), granting it access to privileged credentials\n",
+						trigger, strings.TrimSpace(refInput.Value.Value))
+				}
+			case *actionlint.ExecRun:
+				if exec.Run == nil {
+					continue
+				}
+				if stepChecksOutUntrustedCode(exec.Run.Value) {
+					fmt.Fprintf(&message,
+						"%s workflow checks out untrusted code in a run step, granting it access to privileged credentials\n",
+						trigger)
+				}
+			}
+		}
+	}
+
+	if message.Len() > 0 {
+		return false, message.String()
+	}
+	return true, ""
+}
+
+// stepChecksOutUntrustedCode reports whether a run: script materializes an
+// untrusted PR head into the workspace. `gh pr checkout` always targets the PR
+// head, so it is flagged unconditionally; git checkout/fetch/switch is flagged
+// only when it also references an untrusted head ref, so a benign
+// `git checkout main` is not a false positive.
+func stepChecksOutUntrustedCode(script string) bool {
+	if ghPrCheckoutCommand.MatchString(script) {
+		return true
+	}
+	return gitCheckoutCommand.MatchString(script) && untrustedHeadRef.MatchString(script)
 }
 
 // checkWorkflowFileForBranchNameUsage checks a workflow for unsanitized branch name
