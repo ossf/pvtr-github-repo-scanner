@@ -557,7 +557,10 @@ controls:
           - Maturity Level 1
           - Maturity Level 2
           - Maturity Level 3
-        recommendation: # TODO
+        recommendation: |
+          CI/CD pipelines should isolate untrusted code snapshots from privileged credentials and assets.
+          In particular, projects should be careful to ensure that workflows which build or execute code
+          prior to review by a collaborator do not have access to CI/CD credentials.
 
   - id: OSPS-BR-02
     title: |

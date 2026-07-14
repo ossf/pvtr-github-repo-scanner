@@ -2,10 +2,13 @@ package build_release
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var goodWorkflowFile = `name: OSPS Baseline Scan
@@ -731,12 +734,76 @@ func TestCheckWorkflowForUntrustedCodeAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			workflow, _ := actionlint.Parse([]byte(tt.workflowFile))
-			result, message := checkWorkflowForUntrustedCodeAccess(workflow)
-			t.Log(message)
-			assert.Equal(t, tt.expectedResult, result, tt.assertionMsg)
+			workflow, parseErrors := actionlint.Parse([]byte(tt.workflowFile))
+			require.Empty(t, parseErrors)
+			require.NotNil(t, workflow)
+			_, violations := checkWorkflowForUntrustedCodeAccess(workflow)
+			t.Log(strings.Join(violations, "\n"))
+			// expectedResult encodes whether the workflow is free of dangerous
+			// untrusted-code checkouts (true = no violations).
+			assert.Equal(t, tt.expectedResult, len(violations) == 0, tt.assertionMsg)
 		})
 	}
+}
+
+func TestClassifyUntrustedCodeIsolation(t *testing.T) {
+	parse := func(src string) *actionlint.Workflow {
+		workflow, parseErrors := actionlint.Parse([]byte(src))
+		require.Empty(t, parseErrors)
+		require.NotNil(t, workflow)
+		return workflow
+	}
+
+	tests := []struct {
+		name         string
+		workflows    []namedWorkflow
+		wantResult   gemara.Result
+		wantContains string
+	}{
+		{
+			name:         "privileged workflow checking out untrusted code fails",
+			workflows:    []namedWorkflow{{name: "pwn.yml", workflow: parse(pwnRequestWorkflow)}},
+			wantResult:   gemara.Failed,
+			wantContains: "expose privileged credentials",
+		},
+		{
+			name:         "privileged workflow with no dangerous checkout needs review",
+			workflows:    []namedWorkflow{{name: "label.yml", workflow: parse(safePRTargetWorkflow)}},
+			wantResult:   gemara.NeedsReview,
+			wantContains: "label.yml",
+		},
+		{
+			name:         "no privileged workflows passes",
+			workflows:    []namedWorkflow{{name: "push.yml", workflow: parse(safePushWorkflow)}},
+			wantResult:   gemara.Passed,
+			wantContains: "No workflows run untrusted code",
+		},
+		{
+			name: "a failing workflow takes precedence over a review-only one",
+			workflows: []namedWorkflow{
+				{name: "safe.yml", workflow: parse(safePRTargetWorkflow)},
+				{name: "pwn.yml", workflow: parse(pwnRequestWorkflow)},
+			},
+			wantResult:   gemara.Failed,
+			wantContains: "expose privileged credentials",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, message := classifyUntrustedCodeIsolation(tt.workflows)
+			t.Log(message)
+			assert.Equal(t, tt.wantResult, result)
+			assert.Contains(t, message, tt.wantContains)
+		})
+	}
+}
+
+func TestIsCheckoutAction(t *testing.T) {
+	assert.True(t, isCheckoutAction("actions/checkout@v5"))
+	assert.True(t, isCheckoutAction("Actions/Checkout@v5"), "GitHub action repository names are case insensitive")
+	assert.False(t, isCheckoutAction("actions/checkout"), "an action reference must include a version")
+	assert.False(t, isCheckoutAction("some/other-action@v1"))
 }
 
 func TestUntrustedHeadRefRegex(t *testing.T) {
@@ -772,10 +839,12 @@ func TestStepChecksOutUntrustedCode(t *testing.T) {
 		{"git checkout of head sha is untrusted", "git checkout ${{ github.event.pull_request.head.sha }}", true},
 		{"git fetch of pull ref is untrusted", "git fetch origin pull/${{ github.event.issue.number }}/head && git checkout FETCH_HEAD", true},
 		{"git switch to head ref is untrusted", "git switch --detach ${{ github.head_ref }}", true},
+		{"line continuation preserves untrusted fetch", "git fetch origin \\\n  pull/${{ github.event.issue.number }}/head", true},
 		{"plain git checkout main is safe", "git checkout main", false},
 		{"git checkout of base sha is safe", "git checkout ${{ github.sha }}", false},
 		{"unrelated build command is safe", "make build && npm test", false},
 		{"head ref echoed without checkout is safe", "echo ${{ github.head_ref }}", false},
+		{"unrelated head ref and safe checkout are not combined", "echo ${{ github.head_ref }}\ngit checkout main", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -810,10 +879,15 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
 `
-	workflow, _ := actionlint.Parse([]byte(multiOffenderWorkflow))
-	result, message := checkWorkflowForUntrustedCodeAccess(workflow)
+	workflow, parseErrors := actionlint.Parse([]byte(multiOffenderWorkflow))
+	require.Empty(t, parseErrors)
+	require.NotNil(t, workflow)
+	_, violations := checkWorkflowForUntrustedCodeAccess(workflow)
+	message := strings.Join(violations, "\n")
 	t.Log(message)
-	assert.False(t, result, "workflow with multiple head checkouts should be flagged")
+	assert.NotEmpty(t, violations, "workflow with multiple head checkouts should be flagged")
+	assert.Contains(t, message, `job "build"`, "diagnostic should identify the first offending job")
+	assert.Contains(t, message, `job "test"`, "diagnostic should identify the second offending job")
 	assert.Contains(t, message, "github.event.pull_request.head.sha", "first offending step should be reported")
 	assert.Contains(t, message, "github.head_ref", "second offending step should be reported")
 }
