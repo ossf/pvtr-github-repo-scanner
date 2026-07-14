@@ -5,6 +5,7 @@ import (
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -281,6 +282,130 @@ func Test_BranchProtectionPreventsDeletion(t *testing.T) {
 			gotResult, gotMessage, _ := BranchProtectionPreventsDeletion(tt.payload)
 			assert.Equal(t, tt.wantResult, gotResult)
 			assert.Equal(t, tt.wantMessage, gotMessage)
+		})
+	}
+}
+
+func Test_checkWorkflowJobPermissions(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflow     string
+		wantResult   gemara.Result
+		wantFindings []string
+	}{
+		{
+			name: "no permissions block assigned",
+			workflow: `on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi`,
+			wantResult: gemara.NotApplicable,
+		},
+		{
+			name: "empty permissions block is least privilege",
+			workflow: `on: [push]
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi`,
+			wantResult: gemara.Passed,
+		},
+		{
+			name: "read-all requires review",
+			workflow: `on: [push]
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi`,
+			wantResult:   gemara.NeedsReview,
+			wantFindings: []string{`ci.yml: workflow-level permissions grant read-all`},
+		},
+		{
+			name: "individually scoped grants require review",
+			workflow: `on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - run: echo hi`,
+			wantResult: gemara.NeedsReview,
+			wantFindings: []string{
+				`ci.yml (job "build"): permissions grant contents: read`,
+				`ci.yml (job "build"): permissions grant issues: write`,
+			},
+		},
+		{
+			name: "scopes explicitly set to none pass",
+			workflow: `on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: none
+      issues: none
+    steps:
+      - run: echo hi`,
+			wantResult: gemara.Passed,
+		},
+		{
+			name: "workflow-level write-all is flagged",
+			workflow: `on: [push]
+permissions: write-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi`,
+			wantResult:   gemara.Failed,
+			wantFindings: []string{`ci.yml: workflow-level permissions grant write-all`},
+		},
+		{
+			name: "job-level write-all is flagged",
+			workflow: `on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      - run: echo hi`,
+			wantResult:   gemara.Failed,
+			wantFindings: []string{`ci.yml (job "build"): permissions grant write-all`},
+		},
+		{
+			name: "write-all at both levels is flagged twice",
+			workflow: `on: [push]
+permissions: write-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      - run: echo hi`,
+			wantResult: gemara.Failed,
+			wantFindings: []string{
+				`ci.yml (job "build"): permissions grant write-all`,
+				`ci.yml: workflow-level permissions grant write-all`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workflow, err := actionlint.Parse([]byte(tt.workflow))
+			assert.Nil(t, err)
+
+			gotResult, gotFindings := checkWorkflowJobPermissions("ci.yml", workflow)
+			assert.Equal(t, tt.wantResult, gotResult)
+			assert.Equal(t, tt.wantFindings, gotFindings)
 		})
 	}
 }
