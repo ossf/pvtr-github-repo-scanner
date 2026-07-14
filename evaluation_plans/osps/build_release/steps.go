@@ -379,3 +379,21 @@ func SecretScanningInUse(payload data.Payload) (result gemara.Result, message st
 		return gemara.Failed, "Secret scanning is not enabled", confidence
 	}
 }
+
+// DependenciesUseStandardizedTooling implements OSPS-BR-05.01: when a build and
+// release pipeline ingests dependencies, it MUST use standardized tooling where
+// available. GitHub's dependency graph only detects manifests produced by
+// standardized ecosystem tooling (e.g. go.mod, package.json, requirements.txt,
+// Cargo.toml, pom.xml), so the presence of at least one detected manifest is a
+// strong signal that dependencies are ingested through standardized tooling.
+func DependenciesUseStandardizedTooling(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	manifestsCount := payload.DependencyManifestsCount
+	if manifestsCount > 0 {
+		message := fmt.Sprintf("Found %d dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling", manifestsCount)
+		if len(payload.DependencyManifestFilenames) > 0 {
+			message += ": " + strings.Join(payload.DependencyManifestFilenames, ", ")
+		}
+		return gemara.Passed, message, confidence
+	}
+	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph. Review the project to confirm that any dependencies ingested by the build and release pipeline use standardized tooling.", confidence
+}

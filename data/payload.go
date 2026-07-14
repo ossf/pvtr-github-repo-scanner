@@ -17,11 +17,16 @@ type Payload struct {
 	Config                   *config.Config
 	RepositoryMetadata       RepositoryMetadata
 	DependencyManifestsCount int
-	IsCodeRepo               bool
-	SecurityPosture          SecurityPosture
-	client                   *githubv4.Client
-	httpClient               *http.Client
-	cachedTree               *GraphqlRepoTree
+	// DependencyManifestFilenames holds the filenames of the standardized
+	// dependency manifests detected by GitHub's dependency graph. It may be
+	// truncated relative to DependencyManifestsCount for repositories with
+	// more than 100 manifests.
+	DependencyManifestFilenames []string
+	IsCodeRepo                  bool
+	SecurityPosture             SecurityPosture
+	client                      *githubv4.Client
+	httpClient                  *http.Client
+	cachedTree                  *GraphqlRepoTree
 }
 
 func Loader(config *config.Config) (payload any, err error) {
@@ -44,6 +49,14 @@ func Loader(config *config.Config) (payload any, err error) {
 		return nil, err
 	}
 
+	// Manifest filenames only enrich evidence messages, so a failure here
+	// degrades gracefully (empty list) rather than aborting the whole scan.
+	dependencyManifestFilenames, err := getDependencyManifestFilenames(client, config)
+	if err != nil {
+		config.Logger.Warn(fmt.Sprintf("Could not retrieve dependency manifest filenames: %s", err.Error()))
+		dependencyManifestFilenames = nil
+	}
+
 	rest, err := getRestData(ghClient, config)
 	if err != nil {
 		return nil, err
@@ -60,15 +73,16 @@ func Loader(config *config.Config) (payload any, err error) {
 	}
 
 	return any(Payload{
-		GraphqlRepoData:          graphql,
-		RestData:                 rest,
-		Config:                   config,
-		RepositoryMetadata:       repositoryMetadata,
-		DependencyManifestsCount: dependencyManifestsCount,
-		IsCodeRepo:               isCodeRepo,
-		client:                   client,
-		httpClient:               httpClient,
-		SecurityPosture:          securityPosture,
+		GraphqlRepoData:             graphql,
+		RestData:                    rest,
+		Config:                      config,
+		RepositoryMetadata:          repositoryMetadata,
+		DependencyManifestsCount:    dependencyManifestsCount,
+		DependencyManifestFilenames: dependencyManifestFilenames,
+		IsCodeRepo:                  isCodeRepo,
+		client:                      client,
+		httpClient:                  httpClient,
+		SecurityPosture:             securityPosture,
 	}), nil
 }
 

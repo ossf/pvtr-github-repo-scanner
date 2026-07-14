@@ -4,8 +4,11 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
 var goodWorkflowFile = `name: OSPS Baseline Scan
@@ -307,4 +310,46 @@ func TestPullRequestOnlyUnsafeBranchVarsRegex(t *testing.T) {
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.ref_type")), "github.ref_type should not match")
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.ref_protected")), "github.ref_protected should not match")
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.workspace")), "github.workspace should not match")
+}
+
+func TestDependenciesUseStandardizedTooling(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     data.Payload
+		wantResult  gemara.Result
+		wantMessage string
+	}{
+		{
+			name:        "Single dependency manifest detected",
+			payload:     data.Payload{DependencyManifestsCount: 1, DependencyManifestFilenames: []string{"go.mod"}},
+			wantResult:  gemara.Passed,
+			wantMessage: "Found 1 dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling: go.mod",
+		},
+		{
+			name:        "Multiple dependency manifests detected",
+			payload:     data.Payload{DependencyManifestsCount: 3, DependencyManifestFilenames: []string{"go.mod", "package.json", "requirements.txt"}},
+			wantResult:  gemara.Passed,
+			wantMessage: "Found 3 dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling: go.mod, package.json, requirements.txt",
+		},
+		{
+			name:        "Manifests counted but filenames unavailable",
+			payload:     data.Payload{DependencyManifestsCount: 2},
+			wantResult:  gemara.Passed,
+			wantMessage: "Found 2 dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling",
+		},
+		{
+			name:        "No dependency manifests detected",
+			payload:     data.Payload{DependencyManifestsCount: 0},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: "No dependency manifests found in the GitHub dependency graph. Review the project to confirm that any dependencies ingested by the build and release pipeline use standardized tooling.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMessage, _ := DependenciesUseStandardizedTooling(tt.payload)
+			assert.Equal(t, tt.wantResult, gotResult)
+			assert.Equal(t, tt.wantMessage, gotMessage)
+		})
+	}
 }
