@@ -7,10 +7,12 @@ import (
 
 	"os"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans"
 
 	"github.com/privateerproj/privateer-sdk/command"
+	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
 	"github.com/privateerproj/privateer-sdk/shared"
 )
@@ -47,6 +49,15 @@ func main() {
 		PluginUri:     "https://github.com/ossf/pvtr-github-repo-scanner",
 	}
 	orchestrator.AddLoader(data.Loader)
+	orchestrator.AddTargetBuilder(func(c *config.Config) gemara.Resource {
+		slug := fmt.Sprintf("%s/%s", c.GetString("owner"), c.GetString("repo"))
+		return gemara.Resource{
+			Id:   fmt.Sprintf("github.com/%s", slug),
+			Name: slug,
+			Type: gemara.Software,
+			Uri:  fmt.Sprintf("https://github.com/%s", slug),
+		}
+	})
 
 	err := orchestrator.AddReferenceCatalogs(dataDir, files)
 	if err != nil {
