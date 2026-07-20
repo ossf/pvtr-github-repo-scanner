@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/google/go-github/v74/github"
 )
@@ -13,6 +14,8 @@ type RepositoryMetadata interface {
 	IsDefaultBranchProtected() *bool
 	DefaultBranchRequiresPRReviews() *bool
 	IsDefaultBranchProtectedFromDeletion() *bool
+	HasBranchRules() bool
+	RequiredStatusCheckContexts() []string
 }
 
 type GitHubRepositoryMetadata struct {
@@ -52,6 +55,47 @@ func (r *GitHubRepositoryMetadata) DefaultBranchRequiresPRReviews() *bool {
 	}
 	requiresReviews := r.defaultBranchRules != nil && r.defaultBranchRules.PullRequest != nil && len(r.defaultBranchRules.PullRequest) > 0 && r.defaultBranchRules.PullRequest[0].Parameters.RequiredApprovingReviewCount > 0
 	return &requiresReviews
+}
+
+// HasBranchRules reports whether any ruleset at all applies to the default
+// branch, which determines whether rulesets or branch protection are treated as
+// the authoritative source for status check requirements.
+func (r *GitHubRepositoryMetadata) HasBranchRules() bool {
+	if r.defaultBranchRules == nil {
+		return false
+	}
+	// BranchRules is a flat struct with one slice per rule type, so reflecting
+	// over it picks up new rule types without a code change here. Note the
+	// limit: a future non-slice field would be skipped by the Kind check below
+	// rather than counted, under-reporting instead of failing.
+	rules := reflect.ValueOf(*r.defaultBranchRules)
+	for i := range rules.NumField() {
+		field := rules.Field(i)
+		if field.Kind() == reflect.Slice && field.Len() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// RequiredStatusCheckContexts returns the names of the status checks that the
+// default branch's rulesets mark as required.
+func (r *GitHubRepositoryMetadata) RequiredStatusCheckContexts() []string {
+	if r.defaultBranchRules == nil {
+		return nil
+	}
+	var contexts []string
+	for _, rule := range r.defaultBranchRules.RequiredStatusChecks {
+		if rule == nil {
+			continue
+		}
+		for _, check := range rule.Parameters.RequiredStatusChecks {
+			if check != nil {
+				contexts = append(contexts, check.Context)
+			}
+		}
+	}
+	return contexts
 }
 
 func (r *GitHubRepositoryMetadata) OrganizationBlogURL() *string {

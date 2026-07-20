@@ -34,19 +34,13 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 		}
 	}
 
-	// get the rules that apply to the default branch
-	rules := payload.GetRulesets(payload.Repository.DefaultBranchRef.Name)
-	if len(rules) == 0 {
+	// Branch rulesets are fetched once during payload load.
+	if !payload.RepositoryMetadata.HasBranchRules() {
 		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
 	}
 
 	// get the name of all required status checks
-	var requiredChecks []string
-	for _, rule := range payload.Rulesets {
-		for _, requiredCheck := range rule.Parameters.RequiredChecks {
-			requiredChecks = append(requiredChecks, requiredCheck.Context)
-		}
-	}
+	requiredChecks := payload.RepositoryMetadata.RequiredStatusCheckContexts()
 
 	// check whether all executed checks are required
 	missingChecks := []string{}

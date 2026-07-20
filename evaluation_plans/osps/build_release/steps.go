@@ -1,7 +1,6 @@
 package build_release
 
 import (
-	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -58,7 +57,7 @@ func checkAllWorkflows(payload data.Payload, checkWorkflow func(*actionlint.Work
 	var confidence gemara.ConfidenceLevel
 	var message string
 
-	workflows, err := payload.GetDirectoryContent(".github/workflows")
+	workflows, err := payload.GetWorkflowFiles()
 	if len(workflows) == 0 {
 		if err != nil {
 			message = err.Error()
@@ -69,22 +68,13 @@ func checkAllWorkflows(payload data.Payload, checkWorkflow func(*actionlint.Work
 	}
 
 	for _, file := range workflows {
-		if !strings.HasSuffix(*file.Name, ".yml") && !strings.HasSuffix(*file.Name, ".yaml") {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
 			continue
 		}
 
-		if *file.Encoding != "base64" {
-			return gemara.Failed, fmt.Sprintf("File %v is not base64 encoded", file.Name), confidence
-		}
-
-		decoded, err := base64.StdEncoding.DecodeString(*file.Content)
-		if err != nil {
-			return gemara.Failed, fmt.Sprintf("Error decoding workflow file: %v", err), confidence
-		}
-
-		workflow, actionError := actionlint.Parse(decoded)
+		workflow, actionError := actionlint.Parse([]byte(file.Content))
 		if actionError != nil {
-			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", actionError, *file.Path), confidence
+			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", actionError, file.Path), confidence
 		}
 
 		ok, message := checkWorkflow(workflow)
