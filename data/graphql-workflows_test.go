@@ -62,6 +62,22 @@ func TestWorkflowFilesFromQuery(t *testing.T) {
 				{Name: "ci.yml", Path: ".github/workflows/ci.yml", Content: "on: push"},
 			},
 		},
+		{
+			// Git stores a symlink as a blob holding the target path, so only
+			// the mode distinguishes it from a workflow definition. Left in, its
+			// contents reach actionlint and fail the whole control.
+			name: "symlinks are skipped despite being blobs",
+			entries: []WorkflowTreeEntry{
+				{
+					Name: "linked.yml", Path: ".github/workflows/linked.yml", Type: "blob",
+					Mode: symlinkFileMode, Object: blob("../../shared/ci.yml", false),
+				},
+				{Name: "ci.yml", Path: ".github/workflows/ci.yml", Type: "blob", Mode: 100644, Object: blob("on: push", false)},
+			},
+			expected: []WorkflowFile{
+				{Name: "ci.yml", Path: ".github/workflows/ci.yml", Content: "on: push"},
+			},
+		},
 	}
 
 	for _, testCase := range testCases {

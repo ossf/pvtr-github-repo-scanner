@@ -21,12 +21,18 @@ type GraphqlWorkflowFiles struct {
 	} `graphql:"repository(owner: $owner, name: $name)"`
 }
 
+// symlinkFileMode is git's file mode for a symbolic link. Git stores a symlink
+// as a blob whose contents are the link target path, so GraphQL reports it as
+// Type "blob" and only the mode distinguishes it from a regular file.
+const symlinkFileMode = 120000
+
 // WorkflowTreeEntry is one entry in the fetched directory. Type is "blob" for
 // files; Object is nil for entries with no inspectable contents.
 type WorkflowTreeEntry struct {
 	Name   string
 	Path   string
 	Type   string
+	Mode   int
 	Object *WorkflowBlobObject `graphql:"object"`
 }
 
@@ -76,8 +82,16 @@ func fetchWorkflowFiles(cfg *config.Config, client *githubv4.Client, branch, dir
 func workflowFilesFromQuery(query GraphqlWorkflowFiles, logger hclog.Logger) []WorkflowFile {
 	var files []WorkflowFile
 	for _, entry := range query.Repository.Object.Tree.Entries {
-		// Subdirectories, submodules, and symlinks carry no blob to inspect.
+		// Subdirectories and submodules carry no blob to inspect.
 		if entry.Type != "blob" || entry.Object == nil {
+			continue
+		}
+		// A symlink is also a blob, holding the link target path rather than
+		// YAML. Actions does not follow symlinked workflows, and the REST path
+		// this replaced skipped them via type "symlink", so drop them instead of
+		// handing a path string to the parser.
+		if entry.Mode == symlinkFileMode {
+			logger.Debug(fmt.Sprintf("skipping symlink, not an executable workflow: %s", entry.Path))
 			continue
 		}
 		// GitHub truncates very large blobs. Parsing a partial workflow would
