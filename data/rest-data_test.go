@@ -198,4 +198,44 @@ func TestGetSubdirContentsCaching(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, *calls, "an empty directory is a real answer worth caching")
 	})
+
+	t.Run("a directory absent from the root listing is never fetched", func(t *testing.T) {
+		// Errors are not cached, so without consulting the root listing a repo
+		// with no .github directory pays a 404 on every checkFile probe.
+		restData, calls := newRestData(t, `[]`)
+		restData.contents.Content = []*github.RepositoryContent{
+			{Name: github.Ptr("README.md"), Path: github.Ptr("README.md"), Type: github.Ptr("file")},
+			{Name: github.Ptr("src"), Path: github.Ptr("src"), Type: github.Ptr("dir")},
+		}
+
+		_, err := restData.getSubdirContents(".github")
+		assert.Error(t, err)
+		_, err = restData.getSubdirContents(".github")
+		assert.Error(t, err)
+		assert.Equal(t, 0, *calls, "a directory the root listing rules out needs no API call")
+	})
+
+	t.Run("an unavailable root listing still falls through to the API", func(t *testing.T) {
+		// A failed root fetch must not be read as "no directories exist".
+		restData, calls := newRestData(t, `[{"name":"workflows","path":".github/workflows","type":"dir"}]`)
+
+		_, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Equal(t, 1, *calls)
+	})
+
+	t.Run("a directory present in the root listing is fetched", func(t *testing.T) {
+		// The production happy path: the root listing records .github as a
+		// directory, so the guard lets the fetch through and caches it.
+		restData, calls := newRestData(t, `[{"name":"workflows","path":".github/workflows","type":"dir"}]`)
+		restData.contents.Content = []*github.RepositoryContent{
+			{Name: github.Ptr("README.md"), Path: github.Ptr("README.md"), Type: github.Ptr("file")},
+			{Name: github.Ptr(".github"), Path: github.Ptr(".github"), Type: github.Ptr("dir")},
+		}
+
+		result, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Len(t, result.Content, 1)
+		assert.Equal(t, 1, *calls, "a directory the root listing confirms is fetched once")
+	})
 }

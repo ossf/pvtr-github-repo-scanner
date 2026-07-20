@@ -257,6 +257,13 @@ func (r *RestData) getSubdirContents(path string) (RepoContent, error) {
 	if cached, ok := r.contents.SubContent[path]; ok {
 		return cached, nil
 	}
+	// A directory absent from the root listing cannot be fetched, so answer from
+	// that listing instead of spending a guaranteed-404 round trip. This is the
+	// miss the cache above cannot cover: errors are not cached, so without this a
+	// repository with no .github directory pays one 404 per checkFile probe.
+	if !strings.Contains(path, "/") && !r.rootHasDir(path) {
+		return RepoContent{}, fmt.Errorf("directory %q not found in repository root", path)
+	}
 	_, content, _, err := r.ghClient.Repositories.GetContents(context.Background(), r.owner, r.repo, path, nil)
 	if err != nil {
 		return RepoContent{}, err
@@ -272,6 +279,21 @@ func (r *RestData) getSubdirContents(path string) (RepoContent, error) {
 	}
 	r.contents.SubContent[path] = subdir
 	return subdir, nil
+}
+
+// rootHasDir reports whether the cached root listing holds a directory by this
+// name. An unavailable root listing reports true so that a failed root fetch
+// falls through to the API rather than declaring every directory missing.
+func (r *RestData) rootHasDir(name string) bool {
+	if len(r.contents.Content) == 0 {
+		return true
+	}
+	for _, entry := range r.contents.Content {
+		if entry.GetType() == "dir" && entry.GetName() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RestData) getReleases() error {
