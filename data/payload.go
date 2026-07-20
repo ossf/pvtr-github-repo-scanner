@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/go-github/v74/github"
 	"github.com/privateerproj/privateer-sdk/config"
+	"github.com/privateerproj/privateer-sdk/pluginkit"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
 )
@@ -14,6 +15,8 @@ import (
 type Payload struct {
 	*GraphqlRepoData
 	*RestData
+	*pluginkit.APICallCounter // Enable Privateer benchmarking for API calls
+
 	Config                   *config.Config
 	RepositoryMetadata       RepositoryMetadata
 	DependencyManifestsCount int
@@ -25,14 +28,18 @@ type Payload struct {
 }
 
 func Loader(config *config.Config) (payload any, err error) {
-	graphql, client, httpClient, err := getGraphqlRepoData(config)
+	// Count every request the GitHub clients make through this transport
+	callCounter := &pluginkit.APICallCounter{}
+	httpClient := callCounter.WrapClient(oauth2.NewClient(context.Background(), oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: config.GetString("token")},
+	)))
+
+	graphql, client, err := getGraphqlRepoData(config, httpClient)
 	if err != nil {
 		return nil, err
 	}
 
-	ghClient := github.NewClient(oauth2.NewClient(context.Background(), oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: config.GetString("token")},
-	)))
+	ghClient := github.NewClient(httpClient)
 
 	repo, repositoryMetadata, err := loadRepositoryMetadata(ghClient, config.GetString("owner"), config.GetString("repo"))
 	if err != nil {
@@ -44,7 +51,7 @@ func Loader(config *config.Config) (payload any, err error) {
 		return nil, err
 	}
 
-	rest, err := getRestData(ghClient, config)
+	rest, err := getRestData(ghClient, httpClient, config)
 	if err != nil {
 		return nil, err
 	}
@@ -68,15 +75,12 @@ func Loader(config *config.Config) (payload any, err error) {
 		IsCodeRepo:               isCodeRepo,
 		client:                   client,
 		httpClient:               httpClient,
+		APICallCounter:           callCounter,
 		SecurityPosture:          securityPosture,
 	}), nil
 }
 
-func getGraphqlRepoData(config *config.Config) (data *GraphqlRepoData, client *githubv4.Client, httpClient *http.Client, err error) {
-	src := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: config.GetString("token")},
-	)
-	httpClient = oauth2.NewClient(context.Background(), src)
+func getGraphqlRepoData(config *config.Config, httpClient *http.Client) (data *GraphqlRepoData, client *githubv4.Client, err error) {
 	client = githubv4.NewClient(httpClient)
 
 	variables := map[string]any{
@@ -91,13 +95,17 @@ func getGraphqlRepoData(config *config.Config) (data *GraphqlRepoData, client *g
 	if err != nil {
 		config.Logger.Error(fmt.Sprintf("Error querying GitHub GraphQL API: %s", err.Error()))
 	}
-	return data, client, httpClient, err
+	return data, client, err
 }
 
-func getRestData(ghClient *github.Client, config *config.Config) (data *RestData, err error) {
+// getRestData builds the REST accessor on the shared httpClient so its raw
+// endpoint fetches are counted too; left nil, RestData falls back to its own
+// uncounted client and the API-call tally silently undercounts.
+func getRestData(ghClient *github.Client, httpClient *http.Client, config *config.Config) (data *RestData, err error) {
 	r := &RestData{
-		ghClient: ghClient,
-		Config:   config,
+		ghClient:   ghClient,
+		HttpClient: httpClient,
+		Config:     config,
 	}
 	err = r.Setup()
 	return r, err

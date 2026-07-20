@@ -67,7 +67,7 @@ func main() {
 
 	orchestrator.AddRequiredVars(RequiredVars)
 
-	err = orchestrator.AddEvaluationSuiteForAllCatalogs(nil, evaluation_plans.AllSteps())
+	err = pluginkit.AddEvaluationSuiteTypedForAllCatalogs(&orchestrator, nil, evaluation_plans.AllSteps())
 	if err != nil {
 		fmt.Printf("Error adding evaluation suites: %v\n", err)
 		os.Exit(shared.InternalError)

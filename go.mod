@@ -9,7 +9,7 @@ require (
 	github.com/google/go-github/v74 v74.0.0
 	github.com/migueleliasweb/go-github-mock v1.5.0
 	github.com/ossf/si-tooling/v2 v2.2.0
-	github.com/privateerproj/privateer-sdk v1.31.3
+	github.com/privateerproj/privateer-sdk v1.32.0
 	github.com/rhysd/actionlint v1.7.12
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	golang.org/x/oauth2 v0.36.0
@@ -159,7 +159,7 @@ require (
 )
 
 // Uncomment if you're working on a dependency locally
-// replace github.com/privateerproj/privateer-sdk => ../../privateer-sdk
+// replace github.com/privateerproj/privateer-sdk => ../privateer-sdk
 
 // replace github.com/gemaraproj/go-gemara => ../../gemaraproj/go-gemara
 
