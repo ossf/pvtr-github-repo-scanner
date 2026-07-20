@@ -53,19 +53,19 @@ func TestWorkflowFilesFromQuery(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "truncated blobs are skipped rather than partially parsed",
+			name: "truncated blobs are reported without their partial contents",
 			entries: []WorkflowTreeEntry{
 				{Name: "huge.yml", Path: ".github/workflows/huge.yml", Type: "blob", Object: blob("on: pu", true)},
 				{Name: "ci.yml", Path: ".github/workflows/ci.yml", Type: "blob", Object: blob("on: push", false)},
 			},
 			expected: []WorkflowFile{
+				{Name: "huge.yml", Path: ".github/workflows/huge.yml", Truncated: true},
 				{Name: "ci.yml", Path: ".github/workflows/ci.yml", Content: "on: push"},
 			},
 		},
 		{
 			// Git stores a symlink as a blob holding the target path, so only
-			// the mode distinguishes it from a workflow definition. Left in, its
-			// contents reach actionlint and fail the whole control.
+			// the mode distinguishes it from a workflow definition.
 			name: "symlinks are skipped despite being blobs",
 			entries: []WorkflowTreeEntry{
 				{

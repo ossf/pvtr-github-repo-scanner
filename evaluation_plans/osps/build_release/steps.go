@@ -51,36 +51,60 @@ var (
 		`github\.ref_name).*`)
 )
 
-// checkAllWorkflows verifies the payload, iterates over all workflow files, and
-// applies checkWorkflow to each parsed workflow. passMessage is returned when all files pass.
+// checkAllWorkflows fetches the repository's workflow files and evaluates each
+// one with checkWorkflow. passMessage is returned when all files pass.
 func checkAllWorkflows(payload data.Payload, checkWorkflow func(*actionlint.Workflow) (bool, string), passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	var confidence gemara.ConfidenceLevel
-	var message string
 
 	workflows, err := payload.GetWorkflowFiles()
 	if len(workflows) == 0 {
+		message := "No workflows found in .github/workflows directory"
 		if err != nil {
 			message = err.Error()
-		} else {
-			message = "No workflows found in .github/workflows directory"
 		}
 		return gemara.NotApplicable, message, confidence
 	}
+
+	return evaluateWorkflows(workflows, checkWorkflow, passMessage)
+}
+
+// evaluateWorkflows applies checkWorkflow to each parsed workflow.
+//
+// A file we could not retrieve or parse is reported as NeedsReview, not Failed.
+// Failed asserts that the repository violates the control, which we have not
+// observed for a file we never read; NeedsReview says so honestly and puts it in
+// front of a human. An actual violation in a file we did parse still wins, so
+// unreadable siblings can never mask a real finding.
+func evaluateWorkflows(workflows []data.WorkflowFile, checkWorkflow func(*actionlint.Workflow) (bool, string), passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
+	var confidence gemara.ConfidenceLevel
+	var uninspected []string
 
 	for _, file := range workflows {
 		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
 			continue
 		}
 
+		if file.Truncated {
+			uninspected = append(uninspected, fmt.Sprintf("%s (too large to retrieve)", file.Path))
+			continue
+		}
+
 		workflow, actionError := actionlint.Parse([]byte(file.Content))
 		if actionError != nil {
-			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", actionError, file.Path), confidence
+			uninspected = append(uninspected, fmt.Sprintf("%s (%v)", file.Path, actionError))
+			continue
 		}
 
 		ok, message := checkWorkflow(workflow)
 		if !ok {
 			return gemara.Failed, message, confidence
 		}
+	}
+
+	if len(uninspected) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf(
+			"Unable to evaluate %d of %d workflow files, manual review required: %s",
+			len(uninspected), len(workflows), strings.Join(uninspected, "; ")), confidence
 	}
 
 	return gemara.Passed, passMessage, confidence

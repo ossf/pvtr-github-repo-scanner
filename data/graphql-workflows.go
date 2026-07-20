@@ -46,10 +46,15 @@ type WorkflowBlob struct {
 }
 
 // WorkflowFile is a single workflow definition with its contents already decoded.
+//
+// Truncated marks a file GitHub declined to return in full. It is reported
+// rather than dropped so callers can tell "inspected and clean" apart from
+// "never inspected" — see checkAllWorkflows.
 type WorkflowFile struct {
-	Name    string
-	Path    string
-	Content string
+	Name      string
+	Path      string
+	Content   string
+	Truncated bool
 }
 
 // fetchWorkflowFiles returns the decoded contents of every file directly inside
@@ -77,8 +82,9 @@ func fetchWorkflowFiles(cfg *config.Config, client *githubv4.Client, branch, dir
 	return workflowFilesFromQuery(query, cfg.Logger), nil
 }
 
-// workflowFilesFromQuery maps a directory listing onto WorkflowFiles, dropping
-// entries whose contents cannot be evaluated.
+// workflowFilesFromQuery maps a directory listing onto WorkflowFiles. Entries
+// that are not workflow definitions are dropped; entries that are definitions we
+// could not read are kept and marked Truncated.
 func workflowFilesFromQuery(query GraphqlWorkflowFiles, logger hclog.Logger) []WorkflowFile {
 	var files []WorkflowFile
 	for _, entry := range query.Repository.Object.Tree.Entries {
@@ -94,10 +100,12 @@ func workflowFilesFromQuery(query GraphqlWorkflowFiles, logger hclog.Logger) []W
 			logger.Debug(fmt.Sprintf("skipping symlink, not an executable workflow: %s", entry.Path))
 			continue
 		}
-		// GitHub truncates very large blobs. Parsing a partial workflow would
-		// produce misleading results, so skip it and say so.
+		// GitHub truncates very large blobs, and returns no text at all for
+		// blobs that are not valid UTF-8. Either way the contents cannot be
+		// parsed, so mark the file rather than silently omitting it.
 		if entry.Object.Blob.IsTruncated {
-			logger.Warn(fmt.Sprintf("skipping truncated file, too large to evaluate: %s", entry.Path))
+			logger.Warn(fmt.Sprintf("workflow too large to retrieve in full, cannot evaluate: %s", entry.Path))
+			files = append(files, WorkflowFile{Name: entry.Name, Path: entry.Path, Truncated: true})
 			continue
 		}
 		files = append(files, WorkflowFile{

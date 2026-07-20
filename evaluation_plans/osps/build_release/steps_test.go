@@ -4,8 +4,11 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
 var goodWorkflowFile = `name: OSPS Baseline Scan
@@ -307,4 +310,79 @@ func TestPullRequestOnlyUnsafeBranchVarsRegex(t *testing.T) {
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.ref_type")), "github.ref_type should not match")
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.ref_protected")), "github.ref_protected should not match")
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.workspace")), "github.workspace should not match")
+}
+
+// alwaysPasses and alwaysFails stand in for the real per-workflow checks so
+// these cases exercise only how evaluateWorkflows combines their results.
+func alwaysPasses(*actionlint.Workflow) (bool, string) { return true, "" }
+func alwaysFails(*actionlint.Workflow) (bool, string)  { return false, "violation found" }
+
+func TestEvaluateWorkflows(t *testing.T) {
+	testCases := []struct {
+		name           string
+		workflows      []data.WorkflowFile
+		checkWorkflow  func(*actionlint.Workflow) (bool, string)
+		expectedResult gemara.Result
+	}{
+		{
+			name:           "all files parse and pass",
+			workflows:      []data.WorkflowFile{{Name: "ci.yml", Path: "p/ci.yml", Content: goodWorkflowFile}},
+			checkWorkflow:  alwaysPasses,
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "a violation in a parsed file fails",
+			workflows:      []data.WorkflowFile{{Name: "ci.yml", Path: "p/ci.yml", Content: goodWorkflowFile}},
+			checkWorkflow:  alwaysFails,
+			expectedResult: gemara.Failed,
+		},
+		{
+			// Previously returned Failed, asserting a violation in a file that
+			// was never successfully parsed.
+			name:           "an unparseable file needs review rather than failing",
+			workflows:      []data.WorkflowFile{{Name: "ci.yml", Path: "p/ci.yml", Content: "this is not a workflow"}},
+			checkWorkflow:  alwaysPasses,
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			// The symlink regression: an empty body reaching the parser must
+			// not read as a control violation.
+			name:           "an empty file needs review rather than failing",
+			workflows:      []data.WorkflowFile{{Name: "ci.yml", Path: "p/ci.yml", Content: ""}},
+			checkWorkflow:  alwaysPasses,
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			name:           "a truncated file needs review rather than passing silently",
+			workflows:      []data.WorkflowFile{{Name: "huge.yml", Path: "p/huge.yml", Truncated: true}},
+			checkWorkflow:  alwaysPasses,
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			// An uninspectable sibling must never suppress a real finding.
+			name: "a real violation outranks an uninspectable sibling",
+			workflows: []data.WorkflowFile{
+				{Name: "broken.yml", Path: "p/broken.yml", Content: "not a workflow"},
+				{Name: "ci.yml", Path: "p/ci.yml", Content: goodWorkflowFile},
+			},
+			checkWorkflow:  alwaysFails,
+			expectedResult: gemara.Failed,
+		},
+		{
+			name: "non-workflow extensions are ignored, not flagged",
+			workflows: []data.WorkflowFile{
+				{Name: "README.md", Path: "p/README.md", Content: "not a workflow"},
+				{Name: "ci.yml", Path: "p/ci.yml", Content: goodWorkflowFile},
+			},
+			checkWorkflow:  alwaysPasses,
+			expectedResult: gemara.Passed,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, message, _ := evaluateWorkflows(testCase.workflows, testCase.checkWorkflow, "all workflows passed")
+			assert.Equal(t, testCase.expectedResult, result, message)
+		})
+	}
 }
