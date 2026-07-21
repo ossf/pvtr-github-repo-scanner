@@ -1,4 +1,12 @@
 loglevel: info # increase to trace for more verbose output
+
+# Optional AI-assist: when set, inconclusive checks may ask a model and record
+# its answer as evidence. Leave unset to disable. Prefer PVTR_AI_API_KEY over the
+# file for the credential. See the SDK docs/ai-assist.md for the full contract.
+# ai_provider: openai   # openai or anthropic
+# ai_model: gpt-4o-mini
+# ai_api_key: <provider credential>
+
 write-directory: evaluation_results
 write: true # Change to false if you don't want to write the results to disk
 output: yaml # Change to json if you want CLI and written output in json format

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/google/go-github/v74/github"
+	"github.com/privateerproj/privateer-sdk/ai"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
 	"github.com/shurcooL/githubv4"
@@ -18,7 +20,17 @@ type Payload struct {
 	*RestData
 	*pluginkit.APICallCounter // Enable Privateer benchmarking for API calls
 
+	// Embedded BY POINTER on purpose. Steps receive the Payload by value (see
+	// evaluation_plans.TypedStep) and go-gemara harvests evidence via a
+	// HasEvidence type assertion on that same value. The collector's methods
+	// have pointer receivers, so an embedded value would fail the assertion and
+	// each step copy would collect into its own throwaway slice. A pointer's
+	// promoted methods satisfy HasEvidence for value copies, and every copy
+	// shares the one collector — same reason cache is a pointer.
+	*gemara.EvidenceCollector
+
 	Config                   *config.Config
+	AIClient                 ai.Client // optional AI-assist client; nil when AI is unconfigured
 	RepositoryMetadata       RepositoryMetadata
 	DependencyManifestsCount int
 	IsCodeRepo               bool
@@ -107,9 +119,11 @@ func Loader(config *config.Config) (payload any, err error) {
 	}
 
 	return any(Payload{
+		EvidenceCollector:        &gemara.EvidenceCollector{},
 		GraphqlRepoData:          graphql,
 		RestData:                 rest,
 		Config:                   config,
+		AIClient:                 newAIClient(config),
 		RepositoryMetadata:       repositoryMetadata,
 		DependencyManifestsCount: graphql.Repository.DependencyGraphManifests.TotalCount,
 		IsCodeRepo:               isCodeRepo,
@@ -120,6 +134,24 @@ func Loader(config *config.Config) (payload any, err error) {
 		client:                   gqlClient,
 		cache:                    &payloadCache{},
 	}), nil
+}
+
+// newAIClient builds the optional AI-assist client from the end-user config.
+// AI is opt-in: when the ai_* keys are unset, ai.NewClient returns a nil client
+// and no error, and AI-assisted steps fall back to their deterministic verdicts.
+// An explicit-but-invalid AI config is logged and downgraded to a nil client
+// rather than failing the scan — an optional accelerator must not abort an
+// evaluation run.
+func newAIClient(config *config.Config) ai.Client {
+	client, err := ai.NewClient(*config)
+	if err != nil {
+		config.Logger.Warn(
+			"AI-assist is configured but could not be initialized; AI-assisted steps will fall back to deterministic results",
+			"error", err,
+		)
+		return nil
+	}
+	return client
 }
 
 func getGraphqlRepoData(config *config.Config, client *githubv4.Client, owner, repo string) (data *GraphqlRepoData, err error) {
