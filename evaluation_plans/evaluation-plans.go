@@ -103,7 +103,6 @@ var (
 		"OSPS-DO-06.01": {
 			reusable_steps.IsCodeRepo,
 			reusable_steps.HasMadeReleases,
-			reusable_steps.HasSecurityInsightsFile,
 			docs.HasDependencyManagementPolicy,
 		},
 		"OSPS-GV-01.01": {

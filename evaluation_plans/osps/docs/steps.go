@@ -39,11 +39,18 @@ func HasSignatureVerificationGuide(payload data.Payload) (result gemara.Result, 
 }
 
 func HasDependencyManagementPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if payload.Insights.Repository.Documentation.DependencyManagementPolicy == nil {
-		return gemara.Failed, "Dependency management policy was NOT specified in Security Insights data", confidence
+	if payload.Insights.Repository.Documentation.DependencyManagementPolicy != nil {
+		return gemara.Passed, "Dependency management policy was specified in Security Insights data", gemara.High
 	}
 
-	return gemara.Passed, "Dependency management policy was specified in Security Insights data", confidence
+	// Most repositories lack security-insights.yml. An automated dependency-update
+	// tool config (Dependabot, Renovate) is directly observable evidence that the
+	// repository manages its dependencies, so honor it as a fallback.
+	if configPath := payload.DependencyToolingConfig(); configPath != "" {
+		return gemara.Passed, "Automated dependency-update tooling configuration found in GitHub repository contents: " + configPath, gemara.Medium
+	}
+
+	return gemara.Failed, "Dependency management policy was NOT specified in Security Insights data", gemara.Medium
 }
 
 func HasIdentityVerificationGuide(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

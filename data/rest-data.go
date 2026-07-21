@@ -159,6 +159,32 @@ func (r *RestData) checkFile(filename string) (filepath string) {
 	return filepath
 }
 
+// dependencyToolingConfigFiles are the config files read by automated
+// dependency-update tools (Dependabot, Renovate). Their presence is direct
+// evidence a repository manages its dependencies, observable even when
+// security-insights.yml is absent.
+var dependencyToolingConfigFiles = []string{
+	"dependabot.yml",
+	"dependabot.yaml",
+	"renovate.json",
+	"renovate.json5",
+	".renovaterc",
+	".renovaterc.json",
+}
+
+// DependencyToolingConfig returns the path to the first automated
+// dependency-update tool config found in the repository root or .github
+// directory, or "" when none is present. checkFile probes .github
+// case-insensitively, which is where Dependabot configs live.
+func (r *RestData) DependencyToolingConfig() string {
+	for _, filename := range dependencyToolingConfigFiles {
+		if path := r.checkFile(filename); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
 // returns true when a file with case insensitive name matching support.md is found in the root or forge directories or when the readme.md contains a heading named "Support"
 func (r *RestData) HasSupportMarkdown() bool {
 	if r.checkFile("support.md") != "" {
