@@ -24,25 +24,25 @@ func HasUserGuides(payload data.Payload) (result gemara.Result, message string, 
 
 func AcceptsVulnReports(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.Insights.Project.VulnerabilityReporting.ReportsAccepted {
-		return gemara.Passed, "Repository accepts vulnerability reports according to Security Insights data", confidence
+		return gemara.Passed, "Repository accepts vulnerability reports according to Security Insights data", gemara.High
 	}
 
 	if payload.PrivateVulnReporting.Enabled {
-		return gemara.Passed, "No Security Insights data, but GitHub private vulnerability reporting is enabled for the repository", confidence
+		return gemara.Passed, "No Security Insights data, but GitHub private vulnerability reporting is enabled for the repository", gemara.Medium
 	}
 
 	if payload.SecurityPolicy.Present {
-		return gemara.Passed, "No Security Insights data, but a SECURITY.md file documenting how to report vulnerabilities was found via GitHub", confidence
+		return gemara.Passed, "No Security Insights data, but a SECURITY.md file documenting how to report vulnerabilities was found via GitHub", gemara.Medium
 	}
 
 	// Nothing positively confirms a reporting channel. Only treat that as Failed
 	// when GitHub confirms private reporting is disabled; otherwise the signal is
 	// simply unobservable and warrants review rather than a false negative.
 	if !payload.PrivateVulnReporting.Known {
-		return gemara.NeedsReview, "No vulnerability reporting channel found in Security Insights or a SECURITY.md file, and GitHub private vulnerability reporting status could not be determined", confidence
+		return gemara.NeedsReview, "No vulnerability reporting channel found in Security Insights or a SECURITY.md file, and GitHub private vulnerability reporting status could not be determined", gemara.Low
 	}
 
-	return gemara.Failed, "Security Insights does not accept reports, no SECURITY.md file was found, and GitHub private vulnerability reporting is disabled", confidence
+	return gemara.Failed, "Security Insights does not accept reports, no SECURITY.md file was found, and GitHub private vulnerability reporting is disabled", gemara.Medium
 }
 
 func HasSignatureVerificationGuide(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

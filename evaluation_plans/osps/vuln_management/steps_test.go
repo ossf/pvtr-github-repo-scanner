@@ -125,16 +125,16 @@ func TestHasVulnerabilityDisclosurePolicy(t *testing.T) {
 			expectedMessage: "Vulnerability disclosure policy was specified in Security Insights data",
 		},
 		{
-			name:                  "No SI policy but GitHub security policy enabled",
+			name:                  "No SI policy but GitHub security policy enabled warrants review",
 			securityPolicyEnabled: true,
-			expectedResult:        gemara.Passed,
-			expectedMessage:       "No Security Insights policy, but GitHub reports a security policy is enabled for the repository",
+			expectedResult:        gemara.NeedsReview,
+			expectedMessage:       "GitHub reports a security policy is enabled for the repository; its CVD policy content and response timeframe need human confirmation",
 		},
 		{
-			name:              "No SI policy but SECURITY.md present",
+			name:              "No SI policy but SECURITY.md present warrants review",
 			securityMdPresent: true,
-			expectedResult:    gemara.Passed,
-			expectedMessage:   "No Security Insights policy, but a SECURITY.md file was found in the repository via GitHub",
+			expectedResult:    gemara.NeedsReview,
+			expectedMessage:   "A SECURITY.md file was found in the repository via GitHub; its CVD policy content and response timeframe need human confirmation",
 		},
 		{
 			name:            "No policy from any source",

@@ -46,7 +46,7 @@ func TestGetPrivateVulnReporting(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			payload := NewPayloadWithHTTPMock(Payload{}, []byte(test.body), test.statusCode, test.httpErr)
-			payload.RestData.getPrivateVulnReporting()
+			payload.getPrivateVulnReporting()
 
 			assert.Equal(t, test.wantEnabled, payload.PrivateVulnReporting.Enabled)
 			assert.Equal(t, test.wantKnown, payload.PrivateVulnReporting.Known)
