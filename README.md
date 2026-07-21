@@ -51,6 +51,10 @@ To use scan results with the OpenSSF Best Practices Badge, see the user guide in
 
 Contributions are welcome! Please see our [Contributing Guidelines](.github/CONTRIBUTING.md) for more information.
 
+When writing or changing an assessment step, follow the result-semantics
+contract in [docs/assessment-result-semantics.md](docs/assessment-result-semantics.md)
+so results stay consistent across controls.
+
 ## License
 
 This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
