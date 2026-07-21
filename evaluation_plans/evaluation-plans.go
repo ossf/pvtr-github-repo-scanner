@@ -50,7 +50,6 @@ var (
 			reusable_steps.NotImplemented,
 		},
 		"OSPS-BR-03.01": {
-			reusable_steps.HasSecurityInsightsFile,
 			build_release.EnsureInsightsLinksUseHTTPS,
 		},
 		"OSPS-BR-03.02": {

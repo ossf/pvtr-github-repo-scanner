@@ -11,6 +11,7 @@ import (
 type RepositoryMetadata interface {
 	IsActive() bool
 	IsPublic() bool
+	Homepage() string
 	OrganizationBlogURL() *string
 	IsDefaultBranchProtected() *bool
 	DefaultBranchRequiresPRReviews() *bool
@@ -117,6 +118,13 @@ func (r *GitHubRepositoryMetadata) RulesetsObserved() bool {
 // invisible one.
 func (r *GitHubRepositoryMetadata) ViewerCanAdminister() bool {
 	return r.ghRepo.GetPermissions()["admin"]
+}
+
+// Homepage returns the repository's configured homepage URL, or "" when unset.
+// It is observable without Security Insights and used as a fallback link to
+// evaluate for HTTPS. GetHomepage is nil-safe on a missing repository.
+func (r *GitHubRepositoryMetadata) Homepage() string {
+	return r.ghRepo.GetHomepage()
 }
 
 func (r *GitHubRepositoryMetadata) OrganizationBlogURL() *string {
