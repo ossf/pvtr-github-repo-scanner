@@ -24,18 +24,20 @@ type HttpClient interface {
 }
 
 type RestData struct {
-	owner               string
-	repo                string
-	token               string
-	Config              *config.Config
-	WorkflowsEnabled    bool
-	WorkflowPermissions WorkflowPermissions
-	Insights            si.SecurityInsights
-	InsightsError       bool
-	Releases            []ReleaseData
-	contents            RepoContent
-	ghClient            *github.Client `json:"-" yaml:"-"`
-	HttpClient          HttpClient     `json:"-" yaml:"-"`
+	owner                string
+	repo                 string
+	token                string
+	Config               *config.Config
+	WorkflowsEnabled     bool
+	WorkflowPermissions  WorkflowPermissions
+	Insights             si.SecurityInsights
+	InsightsError        bool
+	PrivateVulnReporting PrivateVulnReporting
+	SecurityPolicy       SecurityPolicy
+	Releases             []ReleaseData
+	contents             RepoContent
+	ghClient             *github.Client `json:"-" yaml:"-"`
+	HttpClient           HttpClient     `json:"-" yaml:"-"`
 }
 
 type RepoContent struct {
@@ -72,13 +74,20 @@ func (r *RestData) Setup() error {
 	// Errors are expected when one of these are not in place; safe to ignore
 	var wg sync.WaitGroup
 	wg.Go(func() {
+		// Both loaders probe repository contents via checkFile, which writes the
+		// shared .github listing into the contents cache; running them in the same
+		// goroutine keeps that write single-threaded while reusing the cached probe.
 		r.loadSecurityInsights()
+		r.loadSecurityPolicy()
 	})
 	wg.Go(func() {
 		_ = r.getWorkflowPermissions()
 	})
 	wg.Go(func() {
 		_ = r.getReleases()
+	})
+	wg.Go(func() {
+		r.getPrivateVulnReporting()
 	})
 	wg.Wait()
 	return nil

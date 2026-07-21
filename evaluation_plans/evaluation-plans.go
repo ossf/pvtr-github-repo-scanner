@@ -207,7 +207,6 @@ var (
 		},
 		"OSPS-VM-01.01": {
 			reusable_steps.IsActive,
-			reusable_steps.HasSecurityInsightsFile,
 			vuln_management.HasVulnerabilityDisclosurePolicy,
 		},
 		"OSPS-VM-02.01": {
@@ -216,7 +215,6 @@ var (
 		},
 		"OSPS-VM-03.01": {
 			reusable_steps.IsActive,
-			reusable_steps.HasSecurityInsightsFile,
 			vuln_management.HasPrivateVulnerabilityReporting,
 		},
 		"OSPS-VM-04.01": {
