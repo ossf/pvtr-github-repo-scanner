@@ -6,47 +6,69 @@ import (
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
+// unobservableProtectionMessage explains why an unprotected-looking default
+// branch is reported as NeedsReview rather than Failed: classic branch
+// protection is only visible to admins, so a non-admin scan cannot tell an
+// unprotected branch from a protected one it simply cannot see.
+const unobservableProtectionMessage = "Default branch protection is not observable with the current token; an admin token or a Security Insights declaration is required to confirm it."
+
+func isTrue(b *bool) bool {
+	return b != nil && *b
+}
+
 func BranchProtectionRestrictsPushes(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	protectionData := payload.Repository.DefaultBranchRef.BranchProtectionRule
+	metadata := payload.RepositoryMetadata
 
-	if protectionData.RestrictsPushes {
+	switch {
+	// Classic branch protection is admin-only, so a non-zero value is a positive
+	// observation of protection regardless of the token's other permissions.
+	case protectionData.RestrictsPushes:
 		result = gemara.Passed
 		message = "Branch protection rule restricts pushes"
-	} else if protectionData.RequiresApprovingReviews {
+		confidence = gemara.High
+	case protectionData.RequiresApprovingReviews:
 		result = gemara.Passed
 		message = "Branch protection rule requires approving reviews"
-	} else {
-		if payload.RepositoryMetadata.IsDefaultBranchProtected() != nil && *payload.RepositoryMetadata.IsDefaultBranchProtected() {
-			result = gemara.Passed
-			message = "Branch rule restricts pushes"
-		} else if payload.RepositoryMetadata.DefaultBranchRequiresPRReviews() != nil && *payload.RepositoryMetadata.DefaultBranchRequiresPRReviews() {
-			result = gemara.Passed
-			message = "Branch rule requires approving reviews"
-		} else {
-			result = gemara.Failed
-			message = "Default branch is not protected"
-		}
+		confidence = gemara.High
+	case isTrue(metadata.IsDefaultBranchProtected()):
+		result = gemara.Passed
+		message = "Branch rule restricts pushes"
+		confidence = gemara.High
+	case isTrue(metadata.DefaultBranchRequiresPRReviews()):
+		result = gemara.Passed
+		message = "Branch rule requires approving reviews"
+		confidence = gemara.High
+	case metadata.RulesetsObserved() && metadata.ViewerCanAdminister():
+		result = gemara.Failed
+		message = "Default branch is not protected"
+		confidence = gemara.High
+	default:
+		result = gemara.NeedsReview
+		message = unobservableProtectionMessage
+		confidence = gemara.Low
 	}
 	return result, message, confidence
 }
 
 func BranchProtectionPreventsDeletion(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	branchProtectionAllowsDeletion := payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions
-	deletionRule := payload.RepositoryMetadata.IsDefaultBranchProtectedFromDeletion()
-	branchRulesAllowDeletion := deletionRule == nil || !*deletionRule
+	metadata := payload.RepositoryMetadata
 
-	if branchProtectionAllowsDeletion && branchRulesAllowDeletion {
-		result = gemara.Failed
-		message = "Default branch is not protected from deletions"
-	} else {
-		result = gemara.Passed
-		if deletionRule != nil && *deletionRule {
-			message = "Default branch is protected from deletions by rulesets"
-		} else {
-			message = "Default branch is protected from deletions by branch protection rules"
-		}
+	// Rulesets are publicly readable, so a positive deletion rule is trustworthy.
+	if isTrue(metadata.IsDefaultBranchProtectedFromDeletion()) {
+		return gemara.Passed, "Default branch is protected from deletions by rulesets", gemara.High
 	}
-	return result, message, confidence
+
+	// A non-admin token reads it as a zero-value false, which must not be
+	// mistaken for "deletions are blocked" — the original false-pass bug.
+	if !metadata.ViewerCanAdminister() {
+		return gemara.NeedsReview, unobservableProtectionMessage, gemara.Low
+	}
+
+	if payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions {
+		return gemara.Failed, "Default branch is not protected from deletions", gemara.High
+	}
+	return gemara.Passed, "Default branch is protected from deletions by branch protection rules", gemara.High
 }
 
 func WorkflowDefaultReadPermissions(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

@@ -17,6 +17,8 @@ type RepositoryMetadata interface {
 	IsDefaultBranchProtectedFromDeletion() *bool
 	HasBranchRules() bool
 	RequiredStatusCheckContexts() []string
+	RulesetsObserved() bool
+	ViewerCanAdminister() bool
 }
 
 type GitHubRepositoryMetadata struct {
@@ -97,6 +99,24 @@ func (r *GitHubRepositoryMetadata) RequiredStatusCheckContexts() []string {
 		}
 	}
 	return contexts
+}
+
+// RulesetsObserved reports whether the ruleset lookup for the default branch
+// actually completed. The rulesets REST API is publicly readable, so a nil
+// value means the fetch failed rather than that no rulesets exist — this lets
+// callers tell "observed, none configured" from "never observed".
+func (r *GitHubRepositoryMetadata) RulesetsObserved() bool {
+	return r.defaultBranchRules != nil
+}
+
+// ViewerCanAdminister reports whether the scanning token holds admin on the
+// repository. GitHub exposes classic branch protection (the GraphQL
+// BranchProtectionRule and RefUpdateRule objects) only to admins; for any other
+// token they come back as zero values indistinguishable from "no protection".
+// Callers gate on this to tell an observed absence of protection apart from an
+// invisible one.
+func (r *GitHubRepositoryMetadata) ViewerCanAdminister() bool {
+	return r.ghRepo.GetPermissions()["admin"]
 }
 
 func (r *GitHubRepositoryMetadata) OrganizationBlogURL() *string {
