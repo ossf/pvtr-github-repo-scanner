@@ -64,12 +64,8 @@ type WorkflowPermissions struct {
 var APIBase = "https://api.github.com"
 
 func (r *RestData) Setup() error {
-	// owner/repo/token are resolved by newRestData
-	if r.owner == "" && r.Config != nil {
-		r.owner = r.Config.GetString("owner")
-		r.repo = r.Config.GetString("repo")
-		r.token = r.Config.GetString("token")
-	}
+	// owner/repo/token are resolved by newRestData; Setup is only ever
+	// reached through it, so no fallback resolution is needed here.
 
 	r.getRepoContents()
 
