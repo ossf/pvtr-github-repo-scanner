@@ -53,7 +53,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, read permissions and no PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "read", // read access for the contents and packages permissions
 						CanApprovePullRequest: false,  // cannot create or approve PRs
@@ -67,7 +68,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, read permissions, but allows PR approvals",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "read", // read access for the contents and packages permissions
 						CanApprovePullRequest: true,   // can create & approve PRs
@@ -81,7 +83,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, write permissions and no PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write", // read & write access for all permission scopes
 						CanApprovePullRequest: false,   // cannot create or approve PRs (in theory at least)
@@ -95,7 +98,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, write permissions and PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write",
 						CanApprovePullRequest: true,
@@ -109,7 +113,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows disabled",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: false,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            false,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write",
 						CanApprovePullRequest: true,

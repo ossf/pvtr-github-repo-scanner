@@ -24,20 +24,25 @@ type HttpClient interface {
 }
 
 type RestData struct {
-	owner                string
-	repo                 string
-	token                string
-	Config               *config.Config
-	WorkflowsEnabled     bool
-	WorkflowPermissions  WorkflowPermissions
-	Insights             si.SecurityInsights
-	InsightsError        bool
-	PrivateVulnReporting PrivateVulnReporting
-	SecurityPolicy       SecurityPolicy
-	Releases             []ReleaseData
-	contents             RepoContent
-	ghClient             *github.Client `json:"-" yaml:"-"`
-	HttpClient           HttpClient     `json:"-" yaml:"-"`
+	owner               string
+	repo                string
+	token               string
+	Config              *config.Config
+	WorkflowsEnabled    bool
+	WorkflowPermissions WorkflowPermissions
+	// WorkflowPermissionsObserved is true only when both admin-only Actions
+	// endpoints were fetched and parsed successfully. When false, WorkflowsEnabled
+	// and WorkflowPermissions are unset defaults rather than observed values, and
+	// callers must not read "Actions disabled" or "write default" into them.
+	WorkflowPermissionsObserved bool
+	Insights                    si.SecurityInsights
+	InsightsError               bool
+	PrivateVulnReporting        PrivateVulnReporting
+	SecurityPolicy              SecurityPolicy
+	Releases                    []ReleaseData
+	contents                    RepoContent
+	ghClient                    *github.Client `json:"-" yaml:"-"`
+	HttpClient                  HttpClient     `json:"-" yaml:"-"`
 }
 
 type RepoContent struct {
@@ -378,7 +383,8 @@ func (r *RestData) getWorkflowPermissions() error {
 	if err := json.Unmarshal(responseData, &r.WorkflowPermissions); err != nil {
 		return fmt.Errorf("failed to parse permissions: %v", err)
 	}
-	return err
+	r.WorkflowPermissionsObserved = true
+	return nil
 }
 
 // IsCodeRepo returns true if the repository contains any programming languages.
