@@ -102,9 +102,9 @@ func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gem
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	// TODO: This only checks the top 3 levels of the repository tree
 	// for common binary file extensions and it fails on very large repositories.
-	suspectedBinaries, err := payload.GetSuspectedBinaries()
-	if err != nil {
-		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", err.Error()))
+	suspectedBinaries := payload.Binaries.Suspected
+	if payload.Binaries.Err != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", payload.Binaries.Err.Error()))
 		return gemara.Unknown, "Error while scanning repository for binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
@@ -119,11 +119,9 @@ func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message strin
 // artifacts such as compiled executables, shared libraries, or archive binaries.
 // Acceptable binary content (images, audio, video, fonts, PDFs) is not flagged.
 func NoUnreviewableBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	unreviewableBinaries, err := payload.GetUnreviewableBinaries()
-	if err != nil {
-		if payload.Config != nil && payload.Config.Logger != nil {
-			payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
-		}
+	unreviewableBinaries := payload.Binaries.Unreviewable
+	if payload.Binaries.Err != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", payload.Binaries.Err.Error()))
 		return gemara.Unknown, "Error while scanning repository for unreviewable binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
