@@ -177,3 +177,103 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 		})
 	}
 }
+
+type treeEntry struct {
+	name     string
+	treeType string
+}
+
+// graphqlWithTree builds the payload shape countDependencyManifests reads: the
+// repository root tree populated with the given entries. Entries are anonymous
+// structs in the query, so grow appends zero values that we then fill in.
+func graphqlWithTree(t *testing.T, entries ...treeEntry) *data.GraphqlRepoData {
+	t.Helper()
+	graphql := &data.GraphqlRepoData{}
+
+	treeEntries := &graphql.Repository.Object.Tree.Entries
+	for i, e := range entries {
+		grow(t, treeEntries)
+		(*treeEntries)[i].Name = e.name
+		if e.treeType != "" {
+			(*treeEntries)[i].Type = e.treeType
+		} else {
+			(*treeEntries)[i].Type = "blob"
+		}
+	}
+	return graphql
+}
+
+func Test_countDependencyManifests(t *testing.T) {
+	tests := []struct {
+		name       string
+		graphCount int
+		entries    []treeEntry
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "dependency graph reports manifests",
+			graphCount: 3,
+			wantResult: gemara.Passed,
+			wantMsg:    "Found 3 dependency manifests from GitHub API",
+		},
+		{
+			name:       "graph empty, go module found in tree",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "README.md"}, {name: "go.mod"}, {name: "go.sum"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "dependency manifest(s) found in repository root: go.mod, go.sum",
+		},
+		{
+			name:       "graph empty, npm manifest found case-insensitively",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "Package.JSON"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "dependency manifest(s) found in repository root: Package.JSON",
+		},
+		{
+			name:       "graph empty, python manifest found",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "requirements.txt"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "dependency manifest(s) found in repository root: requirements.txt",
+		},
+		{
+			name:       "graph empty, csproj suffix match",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "MyApp.csproj"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "dependency manifest(s) found in repository root: MyApp.csproj",
+		},
+		{
+			name:       "graph empty, directory named like a manifest is ignored",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "go.mod", treeType: "tree"}, {name: "src", treeType: "tree"}},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.",
+		},
+		{
+			name:       "graph empty, no manifests in tree",
+			graphCount: 0,
+			entries:    []treeEntry{{name: "README.md"}, {name: "LICENSE"}},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := data.Payload{
+				GraphqlRepoData:          graphqlWithTree(t, tt.entries...),
+				DependencyManifestsCount: tt.graphCount,
+			}
+			result, message, _ := countDependencyManifests(payload)
+			if result != tt.wantResult {
+				t.Errorf("result = %v, want %v", result, tt.wantResult)
+			}
+			if message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", message, tt.wantMsg)
+			}
+		})
+	}
+}

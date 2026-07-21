@@ -182,12 +182,69 @@ func VerifyDependencyManagement(payload data.Payload) (result gemara.Result, mes
 	return countDependencyManifests(payload)
 }
 
+// dependencyManifestNames are well-known dependency manifest and lockfile names,
+// matched case-insensitively against exact file names in the repository root.
+var dependencyManifestNames = []string{
+	"go.mod", "go.sum",
+	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+	"requirements.txt", "requirements-dev.txt", "Pipfile", "Pipfile.lock",
+	"pyproject.toml", "poetry.lock", "uv.lock", "setup.py", "setup.cfg",
+	"Cargo.toml", "Cargo.lock",
+	"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+	"Gemfile", "Gemfile.lock",
+	"composer.json", "composer.lock",
+	"mix.exs", "Package.swift", "pubspec.yaml", "packages.config",
+	"flake.nix", "vcpkg.json", "conanfile.txt", "conanfile.py",
+}
+
 func countDependencyManifests(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	manifestsCount := payload.DependencyManifestsCount
 	if manifestsCount > 0 {
-		return gemara.Passed, fmt.Sprintf("Found %d dependency manifests from GitHub API", manifestsCount), confidence
+		return gemara.Passed, fmt.Sprintf("Found %d dependency manifests from GitHub API", manifestsCount), gemara.High
 	}
-	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.", confidence
+
+	// The dependency graph API returned nothing, which happens when the graph is
+	// disabled or has not indexed the repo. Fall back to direct observation of the
+	// root tree before punting to NeedsReview.
+	found := findDependencyManifests(payload)
+	if len(found) > 0 {
+		return gemara.Passed, fmt.Sprintf("dependency manifest(s) found in repository root: %s", strings.Join(found, ", ")), gemara.Medium
+	}
+
+	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.", gemara.Low
+}
+
+// findDependencyManifests scans the repository root tree (blobs only) for
+// well-known dependency manifests and lockfiles, returning the matched names.
+func findDependencyManifests(payload data.Payload) []string {
+	if payload.GraphqlRepoData == nil {
+		return nil
+	}
+
+	var found []string
+	for _, entry := range payload.Repository.Object.Tree.Entries {
+		if entry.Type != "blob" {
+			continue
+		}
+		if isDependencyManifest(entry.Name) {
+			found = append(found, entry.Name)
+		}
+	}
+	return found
+}
+
+// isDependencyManifest reports whether name is a well-known dependency manifest,
+// matching known names case-insensitively plus any *.csproj project file.
+func isDependencyManifest(name string) bool {
+	if strings.HasSuffix(strings.ToLower(name), ".csproj") {
+		return true
+	}
+	for _, manifest := range dependencyManifestNames {
+		if strings.EqualFold(name, manifest) {
+			return true
+		}
+	}
+	return false
 }
 
 func DocumentsTestExecution(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
