@@ -274,6 +274,12 @@ func (r *RestData) getSubdirContents(path string) (RepoContent, error) {
 	if !strings.Contains(path, "/") && !r.rootHasDir(path) {
 		return RepoContent{}, fmt.Errorf("directory %q not found in repository root", path)
 	}
+	// Production always wires a client through newRestData; guarding here keeps
+	// contents-backed lookups (e.g. checkFile) safe to call in tests that supply
+	// no client rather than panicking on a nil dereference.
+	if r.ghClient == nil {
+		return RepoContent{}, fmt.Errorf("no GitHub client configured; cannot fetch %q", path)
+	}
 	_, content, _, err := r.ghClient.Repositories.GetContents(context.Background(), r.owner, r.repo, path, nil)
 	if err != nil {
 		return RepoContent{}, err
