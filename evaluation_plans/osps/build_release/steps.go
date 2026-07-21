@@ -346,12 +346,92 @@ func EnsureInsightsLinksUseHTTPS(payload data.Payload) (result gemara.Result, me
 	return gemara.Passed, "All links use HTTPS", confidence
 }
 
-func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	releaseDescription := payload.Repository.LatestRelease.Description
-	if strings.Contains(releaseDescription, "Change Log") || strings.Contains(releaseDescription, "Changelog") {
-		return gemara.Passed, "Mention of a changelog found in the latest release", confidence
+// changelogFileNames are repository-root basenames (lower-cased, extension
+// stripped) that conventionally hold change-log content.
+var changelogFileNames = map[string]bool{
+	"changelog":     true,
+	"changes":       true,
+	"history":       true,
+	"news":          true,
+	"releasenotes":  true,
+	"release_notes": true,
+}
+
+// changelogFileExtensions are the extensions accepted alongside the names above.
+// The empty string covers extension-less files such as a bare CHANGELOG.
+var changelogFileExtensions = map[string]bool{
+	"":     true,
+	".md":  true,
+	".rst": true,
+	".txt": true,
+}
+
+// changelogReleaseMarkers are case-insensitive substrings in a release
+// description that indicate change-log content. They cover hand-written notes
+// as well as the headings and compare link GitHub emits for auto-generated
+// release notes ("## What's Changed" ... "**Full Changelog**: .../compare/...").
+var changelogReleaseMarkers = []string{
+	"changelog",
+	"change log",
+	"what's changed",
+	"release notes",
+	"/compare/",
+}
+
+// hasChangelogFile reports whether the repository root tree contains a file
+// whose name matches a recognized change-log convention. It reads the tree
+// already present in the payload, so it costs no additional API calls.
+func hasChangelogFile(payload data.Payload) bool {
+	for _, entry := range payload.Repository.Object.Tree.Entries {
+		if entry.Type != "blob" {
+			continue
+		}
+		name := strings.ToLower(entry.Name)
+		ext := ""
+		if dot := strings.LastIndex(name, "."); dot != -1 {
+			ext = name[dot:]
+			name = name[:dot]
+		}
+		if changelogFileNames[name] && changelogFileExtensions[ext] {
+			return true
+		}
 	}
-	return gemara.Failed, "The latest release does not have mention of a changelog: \n" + releaseDescription, confidence
+	return false
+}
+
+// releaseDescribesChanges reports whether a release description contains any
+// recognized change-log marker (case-insensitive).
+func releaseDescribesChanges(description string) bool {
+	lower := strings.ToLower(description)
+	for _, marker := range changelogReleaseMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureLatestReleaseHasChangelog assesses whether the project documents what
+// changed in its releases. Passed means we observed change-log content (a
+// changelog file in the repo root, or recognizable content in the latest
+// release notes); NeedsReview means the release carries a description a human
+// should judge; Failed means a release exists with no change documentation at
+// all. The HasMadeReleases guard in the chain ensures a release exists.
+func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if hasChangelogFile(payload) {
+		return gemara.Passed, "Changelog file found in repository root", gemara.Medium
+	}
+
+	description := payload.Repository.LatestRelease.Description
+	if releaseDescribesChanges(description) {
+		return gemara.Passed, "Changelog content found in latest release notes", gemara.High
+	}
+
+	if strings.TrimSpace(description) == "" {
+		return gemara.Failed, "The latest release has no description and no changelog file was found in the repository root", gemara.Medium
+	}
+
+	return gemara.NeedsReview, "The latest release description has no recognized changelog markers; manual review required", gemara.Low
 }
 
 func InsightsHasSlsaAttestation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
