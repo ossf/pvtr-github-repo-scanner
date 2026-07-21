@@ -10,6 +10,7 @@ import (
 	"github.com/privateerproj/privateer-sdk/pluginkit"
 	"github.com/shurcooL/githubv4"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/errgroup"
 )
 
 type Payload struct {
@@ -52,29 +53,40 @@ func Loader(config *config.Config) (payload any, err error) {
 		&oauth2.Token{AccessToken: config.GetString("token")},
 	)))
 
-	graphql, client, err := getGraphqlRepoData(config, httpClient)
-	if err != nil {
-		return nil, err
-	}
-
 	ghClient := github.NewClient(httpClient)
+	owner := config.GetString("owner")
+	repo := config.GetString("repo")
 
-	repo, repositoryMetadata, err := loadRepositoryMetadata(ghClient, config.GetString("owner"), config.GetString("repo"))
-	if err != nil {
+	var (
+		graphql            *GraphqlRepoData
+		client             *githubv4.Client
+		ghRepo             *github.Repository
+		repositoryMetadata RepositoryMetadata
+		isCodeRepo         bool
+	)
+	rest := newRestData(ghClient, httpClient, config)
+
+	g := new(errgroup.Group)
+	g.Go(func() (err error) {
+		graphql, client, err = getGraphqlRepoData(config, httpClient, owner, repo)
+		return err
+	})
+	g.Go(func() (err error) {
+		ghRepo, repositoryMetadata, err = loadRepositoryMetadata(ghClient, owner, repo)
+		return err
+	})
+	g.Go(func() error {
+		return rest.Setup()
+	})
+	g.Go(func() (err error) {
+		isCodeRepo, err = rest.IsCodeRepo()
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
-	rest, err := getRestData(ghClient, httpClient, config)
-	if err != nil {
-		return nil, err
-	}
-
-	isCodeRepo, err := rest.IsCodeRepo()
-	if err != nil {
-		return nil, err
-	}
-
-	securityPosture, err := buildSecurityPosture(repo, *rest)
+	securityPosture, err := buildSecurityPosture(ghRepo, *rest)
 	if err != nil {
 		return nil, err
 	}
@@ -94,12 +106,12 @@ func Loader(config *config.Config) (payload any, err error) {
 	}), nil
 }
 
-func getGraphqlRepoData(config *config.Config, httpClient *http.Client) (data *GraphqlRepoData, client *githubv4.Client, err error) {
+func getGraphqlRepoData(config *config.Config, httpClient *http.Client, owner, repo string) (data *GraphqlRepoData, client *githubv4.Client, err error) {
 	client = githubv4.NewClient(httpClient)
 
 	variables := map[string]any{
-		"owner": githubv4.String(config.GetString("owner")),
-		"name":  githubv4.String(config.GetString("repo")),
+		"owner": githubv4.String(owner),
+		"name":  githubv4.String(repo),
 	}
 
 	err = withRetry(config.Logger, "GraphQL repo data query", func() error {
@@ -112,17 +124,22 @@ func getGraphqlRepoData(config *config.Config, httpClient *http.Client) (data *G
 	return data, client, err
 }
 
-// getRestData builds the REST accessor on the shared httpClient so its raw
+// newRestData builds the REST accessor on the shared httpClient so its raw
 // endpoint fetches are counted too; left nil, RestData falls back to its own
 // uncounted client and the API-call tally silently undercounts.
-func getRestData(ghClient *github.Client, httpClient *http.Client, config *config.Config) (data *RestData, err error) {
-	r := &RestData{
+//
+// Construction is network-free and resolves owner/repo/token up front so that
+// Setup and IsCodeRepo — which only read those fields — can run concurrently
+// without a write racing their reads.
+func newRestData(ghClient *github.Client, httpClient *http.Client, config *config.Config) *RestData {
+	return &RestData{
 		ghClient:   ghClient,
 		HttpClient: httpClient,
 		Config:     config,
+		owner:      config.GetString("owner"),
+		repo:       config.GetString("repo"),
+		token:      config.GetString("token"),
 	}
-	err = r.Setup()
-	return r, err
 }
 
 // newBinaryChecker creates a binaryChecker configured from the payload's

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	hclog "github.com/hashicorp/go-hclog"
 
@@ -63,14 +64,27 @@ type WorkflowPermissions struct {
 var APIBase = "https://api.github.com"
 
 func (r *RestData) Setup() error {
-	r.owner = r.Config.GetString("owner")
-	r.repo = r.Config.GetString("repo")
-	r.token = r.Config.GetString("token")
+	// owner/repo/token are resolved by newRestData
+	if r.owner == "" && r.Config != nil {
+		r.owner = r.Config.GetString("owner")
+		r.repo = r.Config.GetString("repo")
+		r.token = r.Config.GetString("token")
+	}
 
 	r.getRepoContents()
-	r.loadSecurityInsights()
-	_ = r.getWorkflowPermissions()
-	_ = r.getReleases()
+
+	// Errors are expected when one of these are not in place; safe to ignore
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		r.loadSecurityInsights()
+	})
+	wg.Go(func() {
+		_ = r.getWorkflowPermissions()
+	})
+	wg.Go(func() {
+		_ = r.getReleases()
+	})
+	wg.Wait()
 	return nil
 }
 

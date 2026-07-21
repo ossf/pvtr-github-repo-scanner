@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"reflect"
+	"sync"
 
 	"github.com/google/go-github/v74/github"
 )
@@ -106,23 +107,35 @@ func (r *GitHubRepositoryMetadata) OrganizationBlogURL() *string {
 }
 
 func loadRepositoryMetadata(ghClient *github.Client, owner, repo string) (ghRepo *github.Repository, data RepositoryMetadata, err error) {
+	// The repository fetch is the only hard dependency: it carries the default
+	// branch the ruleset lookup needs, and its failure is fatal to the scan.
 	repository, _, err := ghClient.Repositories.Get(context.Background(), owner, repo)
 	if err != nil {
 		return repository, &GitHubRepositoryMetadata{}, err
 	}
-	organization, _, err := ghClient.Organizations.Get(context.Background(), owner)
-	if err != nil {
-		return repository, &GitHubRepositoryMetadata{
-			ghRepo: repository,
-		}, nil
-	}
-	branchRules, err := getRuleset(ghClient, owner, repo, repository.GetDefaultBranch())
-	if err != nil {
-		return repository, &GitHubRepositoryMetadata{
-			ghRepo: repository,
-			ghOrg:  organization,
-		}, nil
-	}
+
+	// The organization and ruleset lookups are independent of each other and hit
+	// separate endpoints, so fetch them concurrently.
+	// Errors are expected when an org or ruleset isn't in place; safe to ignore.
+	var (
+		organization *github.Organization
+		branchRules  *github.BranchRules
+	)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		org, _, orgErr := ghClient.Organizations.Get(context.Background(), owner)
+		if orgErr == nil {
+			organization = org // hoist
+		}
+	})
+	wg.Go(func() {
+		rules, rulesErr := getRuleset(ghClient, owner, repo, repository.GetDefaultBranch())
+		if rulesErr == nil {
+			branchRules = rules // hoist
+		}
+	})
+	wg.Wait()
+
 	return repository, &GitHubRepositoryMetadata{
 		ghRepo:             repository,
 		ghOrg:              organization,
