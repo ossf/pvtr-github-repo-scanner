@@ -16,6 +16,14 @@ func RepoIsPublic(payload data.Payload) (result gemara.Result, message string, c
 }
 
 func InsightsListsRepositories(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// A project's full repository set is only knowable from a project-level
+	// declaration like Security Insights; GitHub cannot tell us a multi-repo
+	// project's intended set. So an absent or unparseable SI file is unknown, not
+	// a violation — return NeedsReview rather than a false Failed.
+	if payload.InsightsError || payload.Insights.Header.URL == "" {
+		return gemara.NeedsReview, "Cannot enumerate the project's repositories without a Security Insights declaration", confidence
+	}
+
 	if len(payload.Insights.Project.Repositories) > 0 {
 		return gemara.Passed, "Insights contains a list of repositories", confidence
 	}
