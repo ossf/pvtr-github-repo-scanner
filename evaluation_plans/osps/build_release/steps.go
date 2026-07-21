@@ -362,9 +362,9 @@ func EnsureInsightsLinksUseHTTPS(payload data.Payload) (result gemara.Result, me
 			}
 		}
 		if len(badURIs) > 0 {
-			return gemara.Failed, fmt.Sprintf("The following links do not use HTTPS: %v", strings.Join(badURIs, ", ")), confidence
+			return gemara.Failed, fmt.Sprintf("The following links do not use HTTPS: %v", strings.Join(badURIs, ", ")), gemara.High
 		}
-		return gemara.Passed, "All links use HTTPS", confidence
+		return gemara.Passed, "All links use HTTPS", gemara.High
 	}
 
 	var badURIs []string
@@ -374,9 +374,9 @@ func EnsureInsightsLinksUseHTTPS(payload data.Payload) (result gemara.Result, me
 		}
 	}
 	if len(badURIs) > 0 {
-		return gemara.Failed, "The following observable project links do not use HTTPS: " + strings.Join(badURIs, ", "), confidence
+		return gemara.Failed, "The following observable project links do not use HTTPS: " + strings.Join(badURIs, ", "), gemara.High
 	}
-	return gemara.Passed, "All observable project links use HTTPS (Security Insights not present; checked homepage and release assets)", confidence
+	return gemara.Passed, "All observable project links use HTTPS (Security Insights not present; checked homepage and release assets)", gemara.Medium
 }
 
 func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
@@ -409,9 +409,9 @@ func DistributionPointsUseHTTPS(payload data.Payload) (result gemara.Result, mes
 			}
 		}
 		if len(badURIs) > 0 {
-			return gemara.Failed, fmt.Sprintf("The following distribution points do not use HTTPS: %v", strings.Join(badURIs, ", ")), confidence
+			return gemara.Failed, fmt.Sprintf("The following distribution points do not use HTTPS: %v", strings.Join(badURIs, ", ")), gemara.High
 		}
-		return gemara.Passed, "All distribution points use HTTPS", confidence
+		return gemara.Passed, "All distribution points use HTTPS", gemara.High
 	}
 
 	// Security Insights declares no distribution points. Release assets are the
@@ -436,9 +436,9 @@ func DistributionPointsUseHTTPS(payload data.Payload) (result gemara.Result, mes
 		}
 	}
 	if len(badURIs) > 0 {
-		return gemara.Failed, "The following release asset distribution points do not use HTTPS: " + strings.Join(badURIs, ", "), confidence
+		return gemara.Failed, "The following release asset distribution points do not use HTTPS: " + strings.Join(badURIs, ", "), gemara.High
 	}
-	return gemara.Passed, "All release asset distribution points use HTTPS (checked release assets; Security Insights not present)", confidence
+	return gemara.Passed, "All release asset distribution points use HTTPS (checked release assets; Security Insights not present)", gemara.Medium
 }
 
 func SecretScanningInUse(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

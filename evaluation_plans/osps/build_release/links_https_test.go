@@ -11,21 +11,18 @@ import (
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
-// mockRepositoryMetadata is a stand-in for data.RepositoryMetadata; only
-// Homepage is meaningful to these tests, the rest satisfy the interface.
+// mockRepositoryMetadata is a stand-in for data.RepositoryMetadata. Embedding
+// the interface keeps the mock compiling as the interface grows; only the
+// methods the links steps actually read are overridden, and any other method
+// panics (nil interface) if a test unexpectedly reaches for it. The links steps
+// read Homepage (observableLinks) and OrganizationBlogURL (getLinks).
 type mockRepositoryMetadata struct {
+	data.RepositoryMetadata
 	homepage string
 }
 
-func (m mockRepositoryMetadata) IsActive() bool                              { return true }
-func (m mockRepositoryMetadata) IsPublic() bool                              { return true }
-func (m mockRepositoryMetadata) Homepage() string                            { return m.homepage }
-func (m mockRepositoryMetadata) OrganizationBlogURL() *string                { return nil }
-func (m mockRepositoryMetadata) IsDefaultBranchProtected() *bool             { return nil }
-func (m mockRepositoryMetadata) DefaultBranchRequiresPRReviews() *bool       { return nil }
-func (m mockRepositoryMetadata) IsDefaultBranchProtectedFromDeletion() *bool { return nil }
-func (m mockRepositoryMetadata) HasBranchRules() bool                        { return false }
-func (m mockRepositoryMetadata) RequiredStatusCheckContexts() []string       { return nil }
+func (m mockRepositoryMetadata) Homepage() string             { return m.homepage }
+func (m mockRepositoryMetadata) OrganizationBlogURL() *string { return nil }
 
 // insightsPresent builds a minimally-initialized Security Insights whose Header
 // URL marks the file as present, matching the state getLinks enumeration needs.
