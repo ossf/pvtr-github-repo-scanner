@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+
+	"github.com/google/go-github/v74/github"
 )
 
 type ClientMock struct {
@@ -42,5 +44,23 @@ func NewPayloadWithHTTPMock(base Payload, body []byte, statusCode int, httpErr e
 	}
 	base.ensureInsightsInitialized()
 	base.HttpClient = mock
+	return base
+}
+
+// NewPayloadWithRepoContents builds a Payload whose RestData is backed by the
+// given root and subdirectory listings, so that other packages' tests can
+// exercise contents-based fallbacks (checkFile, FindFile, FindFileInDirs)
+// without a live GitHub client. subContents maps a directory path such as
+// ".github" or "docs" to its file listing.
+func NewPayloadWithRepoContents(base Payload, root []*github.RepositoryContent, subContents map[string][]*github.RepositoryContent) Payload {
+	if base.RestData == nil {
+		base.RestData = &RestData{}
+	}
+	sub := make(map[string]RepoContent, len(subContents))
+	for dir, entries := range subContents {
+		sub[dir] = RepoContent{Content: entries}
+	}
+	base.contents = RepoContent{Content: root, SubContent: sub}
+	base.ensureInsightsInitialized()
 	return base
 }

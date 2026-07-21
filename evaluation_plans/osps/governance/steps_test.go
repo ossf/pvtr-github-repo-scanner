@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
+	"github.com/google/go-github/v74/github"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/si-tooling/v2/si"
 	"github.com/stretchr/testify/assert"
@@ -116,6 +117,183 @@ func TestHasContributionGuide(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, message, _ := HasContributionGuide(test.build())
+			assert.Equal(t, test.expectedResult, result)
+			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
+func file(name, path string) *github.RepositoryContent {
+	return &github.RepositoryContent{
+		Type: github.Ptr("file"),
+		Name: github.Ptr(name),
+		Path: github.Ptr(path),
+	}
+}
+
+func dirEntry(name, path string) *github.RepositoryContent {
+	return &github.RepositoryContent{
+		Type: github.Ptr("dir"),
+		Name: github.Ptr(name),
+		Path: github.Ptr(path),
+	}
+}
+
+func TestCoreTeamIsListed(t *testing.T) {
+	tests := []struct {
+		name            string
+		build           func() data.Payload
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name: "core team declared in Security Insights",
+			build: func() data.Payload {
+				p := data.NewPayloadWithRepoContents(data.Payload{}, nil, nil)
+				p.Insights.Repository.CoreTeam = []si.Contact{{Name: "Maintainer"}}
+				return p
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Core team was specified in Security Insights data",
+		},
+		{
+			name: "MAINTAINERS file in root",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{file("MAINTAINERS", "MAINTAINERS")}, nil)
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Core team listing found via GitHub (MAINTAINERS)",
+		},
+		{
+			name: "CODEOWNERS file in .github",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{dirEntry(".github", ".github")},
+					map[string][]*github.RepositoryContent{
+						".github": {file("CODEOWNERS", ".github/CODEOWNERS")},
+					})
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Core team listing found via GitHub (.github/CODEOWNERS)",
+		},
+		{
+			name: "nothing found",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{file("README.md", "README.md")}, nil)
+			},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "Core team was NOT specified in Security Insights data or via a maintainers/owners file on GitHub",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, message, _ := CoreTeamIsListed(test.build())
+			assert.Equal(t, test.expectedResult, result)
+			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
+func TestProjectAdminsListed(t *testing.T) {
+	tests := []struct {
+		name            string
+		build           func() data.Payload
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name: "admins declared in Security Insights",
+			build: func() data.Payload {
+				p := data.NewPayloadWithRepoContents(data.Payload{}, nil, nil)
+				p.Insights.Project.Administrators = []si.Contact{{Name: "Admin"}}
+				return p
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Project admins were specified in Security Insights data",
+		},
+		{
+			name: "governance/maintainers file is not evidence of admins",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{dirEntry("docs", "docs")},
+					map[string][]*github.RepositoryContent{
+						"docs": {file("GOVERNANCE.md", "docs/GOVERNANCE.md")},
+					})
+			},
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: "Project administrators are not declared in Security Insights data; admin membership is not determinable from public repository files, so manual review is required",
+		},
+		{
+			name: "nothing found",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{}, nil, nil)
+			},
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: "Project administrators are not declared in Security Insights data; admin membership is not determinable from public repository files, so manual review is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, message, _ := ProjectAdminsListed(test.build())
+			assert.Equal(t, test.expectedResult, result)
+			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
+func TestHasRolesAndResponsibilities(t *testing.T) {
+	tests := []struct {
+		name            string
+		build           func() data.Payload
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name: "governance declared in Security Insights",
+			build: func() data.Payload {
+				p := data.NewPayloadWithRepoContents(data.Payload{}, nil, nil)
+				gov := si.URL("https://example.com/GOVERNANCE.md")
+				p.Insights.Repository.Documentation.Governance = &gov
+				return p
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Roles and responsibilities were specified in Security Insights data",
+		},
+		{
+			name: "GOVERNANCE.md in root",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{file("governance.md", "governance.md")}, nil)
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Governance/maintainers documentation found via GitHub (governance.md)",
+		},
+		{
+			name: "CODEOWNERS alone does not satisfy roles and responsibilities",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{},
+					[]*github.RepositoryContent{file("CODEOWNERS", "CODEOWNERS")}, nil)
+			},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "Roles and responsibilities were NOT specified in Security Insights data or via governance/maintainers documentation on GitHub",
+		},
+		{
+			name: "nothing found",
+			build: func() data.Payload {
+				return data.NewPayloadWithRepoContents(data.Payload{}, nil, nil)
+			},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "Roles and responsibilities were NOT specified in Security Insights data or via governance/maintainers documentation on GitHub",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, message, _ := HasRolesAndResponsibilities(test.build())
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
 		})
