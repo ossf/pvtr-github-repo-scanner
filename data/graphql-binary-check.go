@@ -6,62 +6,30 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gabriel-vasile/mimetype"
+	"github.com/google/go-github/v74/github"
 	"github.com/hashicorp/go-hclog"
-	"github.com/privateerproj/privateer-sdk/config"
-	"github.com/shurcooL/githubv4"
 )
 
-type GraphqlRepoTree struct {
-	Repository struct {
-		Object struct {
-			Tree struct {
-				Entries []struct {
-					Name   string
-					Type   string
-					Path   string
-					Mode   int
-					Object *struct {
-						Blob struct {
-							IsBinary    *bool
-							IsTruncated bool
-						} `graphql:"... on Blob"`
-						Tree struct {
-							Entries []struct {
-								Name   string
-								Type   string
-								Path   string
-								Mode   int
-								Object *struct {
-									Blob struct {
-										IsBinary    *bool
-										IsTruncated bool
-									} `graphql:"... on Blob"`
-									Tree struct {
-										Entries []struct {
-											Name   string
-											Type   string
-											Path   string
-											Mode   int
-											Object *struct {
-												Blob struct {
-													IsBinary    *bool
-													IsTruncated bool
-												} `graphql:"... on Blob"`
-											} `graphql:"object"`
-										}
-									} `graphql:"... on Tree"`
-								} `graphql:"object"`
-							}
-						} `graphql:"... on Tree"`
-					} `graphql:"object"`
-				}
-			} `graphql:"... on Tree"`
-		} `graphql:"object(expression: $branch)"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
+// RepoTree is the full repository file tree fetched in a single REST call. Unlike
+// the old depth-limited GraphQL tree, it covers every level. Truncated is set by
+// GitHub when the repository has too many entries to return in one response, in
+// which case Entries is a partial listing and a clean scan is not conclusive.
+type RepoTree struct {
+	Entries   []RepoTreeEntry
+	Truncated bool
+}
+
+// RepoTreeEntry is a single node in the repository tree. Mode is the parsed octal
+// file mode (e.g. 0o100755 for an executable); Type is "blob" or "tree".
+type RepoTreeEntry struct {
+	Path string
+	Mode int
+	Type string
 }
 
 type binaryChecker struct {
@@ -257,80 +225,112 @@ func (bc *binaryChecker) checkUnreviewable(isBinaryPtr *bool, isTruncated bool, 
 // blobCheckFn inspects a single blob entry and returns whether it should be flagged.
 type blobCheckFn func(isBinary *bool, isTruncated bool, path string, mode int) (bool, error)
 
-// walkTree walks the GraphQL repository tree (up to 3 levels deep) and returns
-// the names of blob entries for which fn returns true.
-// TODO: The current GraphQL query only fetches 3 levels of nesting.
-// Additional API calls will be required for recursion into deeper subtrees.
-func walkTree(tree *GraphqlRepoTree, fn blobCheckFn) (flagged []string, err error) {
+// binaryArtifactExtensions are file extensions of compiled executables, object
+// files, libraries, and archives — content that is a binary artifact rather than
+// reviewable source. Acceptable binary formats (images, audio, video, fonts,
+// PDFs) are intentionally excluded here and handled by acceptableBinaryExtension.
+var binaryArtifactExtensions = []string{
+	// Executables and installers
+	".exe", ".out", ".app", ".msi", ".apk", ".aab", ".dmg", ".pkg", ".deb", ".rpm",
+	// Object files, libraries, and other compiled artifacts
+	".dll", ".so", ".dylib", ".a", ".lib", ".o", ".obj", ".class", ".jar", ".war",
+	".ear", ".wasm", ".bin", ".node", ".ko", ".elf", ".nupkg", ".whl", ".egg",
+	".pyc", ".pyo", ".jmod",
+	// Archives (opaque, unreviewable containers)
+	".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".iso",
+}
+
+func binaryArtifactExtension(path string) bool {
+	ext := fileExtension(path)
+	if ext == "" {
+		return false
+	}
+	return slices.Contains(binaryArtifactExtensions, ext)
+}
+
+// classifyIsBinary infers a blob's binary status from its extension, standing in
+// for GitHub's GraphQL IsBinary field, which the REST tree endpoint does not
+// provide. It returns a definitive true for known binary/media extensions and
+// false for known text extensions; an unknown extension yields nil, which the
+// checkers treat as "cannot determine" and leave unflagged. Detection is
+// extension-based so the tree scan needs no per-file content fetch.
+func classifyIsBinary(path string) *bool {
+	binary := true
+	notBinary := false
+	if binaryArtifactExtension(path) || acceptableBinaryExtension(path) {
+		return &binary
+	}
+	if commonAcceptableFileExtension(path) {
+		return &notBinary
+	}
+	return nil
+}
+
+// scanTree applies fn to every blob in the tree and returns the paths of blobs
+// for which fn returns true. It reads the flat REST tree, so files at any depth
+// are covered. isTruncated is always false here: the REST tree carries no blob
+// content to inspect, and detection relies on the extension classifier rather
+// than per-file fetches.
+func scanTree(tree *RepoTree, fn blobCheckFn) (flagged []string, err error) {
 	if tree == nil {
 		return nil, nil
 	}
-	for _, entry := range tree.Repository.Object.Tree.Entries {
-		if entry.Type == "blob" && entry.Object != nil {
-			ok, err := fn(entry.Object.Blob.IsBinary, entry.Object.Blob.IsTruncated, entry.Path, entry.Mode)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				flagged = append(flagged, entry.Name)
-			}
+	for _, entry := range tree.Entries {
+		if entry.Type != "blob" {
+			continue
 		}
-		if entry.Type == "tree" && entry.Object != nil {
-			for _, subEntry := range entry.Object.Tree.Entries {
-				if subEntry.Type == "blob" && subEntry.Object != nil {
-					ok, err := fn(subEntry.Object.Blob.IsBinary, subEntry.Object.Blob.IsTruncated, subEntry.Path, subEntry.Mode)
-					if err != nil {
-						return nil, err
-					}
-					if ok {
-						flagged = append(flagged, subEntry.Name)
-					}
-				}
-				if subEntry.Type == "tree" && subEntry.Object != nil {
-					for _, subSubEntry := range subEntry.Object.Tree.Entries {
-						if subSubEntry.Type == "blob" && subSubEntry.Object != nil {
-							ok, err := fn(subSubEntry.Object.Blob.IsBinary, subSubEntry.Object.Blob.IsTruncated, subSubEntry.Path, subSubEntry.Mode)
-							if err != nil {
-								return nil, err
-							}
-							if ok {
-								flagged = append(flagged, subSubEntry.Name)
-							}
-						}
-						// TODO: The current GraphQL call stops after 3 levels of depth.
-						// Additional API calls will be required for recursion if another tree is found.
-					}
-				}
-			}
+		ok, err := fn(classifyIsBinary(entry.Path), false, entry.Path, entry.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			flagged = append(flagged, entry.Path)
 		}
 	}
 	return flagged, nil
 }
 
-// checkTreeForUnreviewableBinaries returns file names that are unreviewable binary
-// artifacts (OSPS-QA-05.02), excluding acceptable formats like images, audio, and fonts.
-func checkTreeForUnreviewableBinaries(tree *GraphqlRepoTree, bc *binaryChecker) ([]string, error) {
-	return walkTree(tree, func(isBinary *bool, isTruncated bool, path string, _ int) (bool, error) {
+// checkTreeForUnreviewableBinaries returns paths of unreviewable binary artifacts
+// (OSPS-QA-05.02), excluding acceptable formats like images, audio, and fonts.
+func checkTreeForUnreviewableBinaries(tree *RepoTree, bc *binaryChecker) ([]string, error) {
+	return scanTree(tree, func(isBinary *bool, isTruncated bool, path string, _ int) (bool, error) {
 		return bc.checkUnreviewable(isBinary, isTruncated, path)
 	})
 }
 
-func checkTreeForBinaries(tree *GraphqlRepoTree, bc *binaryChecker) ([]string, error) {
-	return walkTree(tree, bc.check)
+// checkTreeForBinaries returns paths of suspected executable binary artifacts
+// (OSPS-QA-05.01).
+func checkTreeForBinaries(tree *RepoTree, bc *binaryChecker) ([]string, error) {
+	return scanTree(tree, bc.check)
 }
 
-func fetchGraphqlRepoTree(config *config.Config, client *githubv4.Client, branch string) (tree *GraphqlRepoTree, err error) {
-	path := ""
-
-	fullPath := fmt.Sprintf("%s:%s", branch, path)
-
-	variables := map[string]any{
-		"owner":  githubv4.String(config.GetString("owner")),
-		"name":   githubv4.String(config.GetString("repo")),
-		"branch": githubv4.String(fullPath),
+// fetchRestRepoTree retrieves the entire repository tree in a single REST call
+// (git/trees/{ref}?recursive=1). This replaces the depth-limited GraphQL tree
+// query: it covers every level and reports GitHub's truncation flag when the
+// repository is too large to return in full, rather than failing outright.
+func fetchRestRepoTree(ghClient *github.Client, owner, repo, ref string) (*RepoTree, error) {
+	ghTree, _, err := ghClient.Git.GetTree(context.Background(), owner, repo, ref, true)
+	if err != nil {
+		return nil, err
 	}
 
-	err = client.Query(context.Background(), &tree, variables)
-
-	return tree, err
+	tree := &RepoTree{Truncated: ghTree.GetTruncated()}
+	for _, entry := range ghTree.Entries {
+		if entry == nil {
+			continue
+		}
+		mode := 0
+		if m := entry.GetMode(); m != "" {
+			// Git tree modes are octal strings such as "100755".
+			if parsed, perr := strconv.ParseInt(m, 8, 32); perr == nil {
+				mode = int(parsed)
+			}
+		}
+		tree.Entries = append(tree.Entries, RepoTreeEntry{
+			Path: entry.GetPath(),
+			Mode: mode,
+			Type: entry.GetType(),
+		})
+	}
+	return tree, nil
 }

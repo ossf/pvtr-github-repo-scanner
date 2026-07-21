@@ -51,6 +51,15 @@ func TestGetWorkflowFilesServesCache(t *testing.T) {
 	})
 }
 
+func TestGetTreeServesCache(t *testing.T) {
+	tree := &RepoTree{}
+	payload := payloadWithCache(&payloadCache{tree: tree})
+
+	got, err := payload.getTree()
+	require.NoError(t, err)
+	assert.Same(t, tree, got)
+}
+
 // graphqlServer returns a githubv4 client pointed at a stub that answers every
 // query with the supplied JSON body.
 func graphqlServer(t *testing.T, body string) (*githubv4.Client, *int) {

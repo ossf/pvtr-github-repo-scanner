@@ -100,18 +100,22 @@ func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gem
 }
 
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// TODO: This only checks the top 3 levels of the repository tree
-	// for common binary file extensions and it fails on very large repositories.
-	suspectedBinaries := payload.Binaries.Suspected
-	if payload.Binaries.Err != nil {
-		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", payload.Binaries.Err.Error()))
+	suspectedBinaries, truncated, err := payload.GetSuspectedBinaries()
+	if err != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", err.Error()))
 		return gemara.Unknown, "Error while scanning repository for binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
-	if len(suspectedBinaries) == 0 {
-		return gemara.Passed, "No common binary file extensions were found in the repository", confidence
+	// A positive finding stands regardless of coverage: a binary we saw is a binary.
+	if len(suspectedBinaries) > 0 {
+		return gemara.Failed, fmt.Sprintf("Suspected binaries found in the repository: %s", strings.Join(suspectedBinaries, ", ")), gemara.High
 	}
-	return gemara.Failed, fmt.Sprintf("Suspected binaries found in the repository: %s", strings.Join(suspectedBinaries, ", ")), confidence
+	// A clean scan over a truncated tree is not a confident pass: we only saw part
+	// of the repository.
+	if truncated {
+		return gemara.NeedsReview, "No binaries found in the scanned portion of the repository, but the file tree was too large to scan in full; manual review required.", gemara.Low
+	}
+	return gemara.Passed, "No common binary file extensions were found in the repository", gemara.High
 }
 
 // NoUnreviewableBinariesInRepo is the assessment step for OSPS-QA-05.02.
@@ -119,16 +123,23 @@ func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message strin
 // artifacts such as compiled executables, shared libraries, or archive binaries.
 // Acceptable binary content (images, audio, video, fonts, PDFs) is not flagged.
 func NoUnreviewableBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	unreviewableBinaries := payload.Binaries.Unreviewable
-	if payload.Binaries.Err != nil {
-		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", payload.Binaries.Err.Error()))
+	unreviewableBinaries, truncated, err := payload.GetUnreviewableBinaries()
+	if err != nil {
+		if payload.Config != nil && payload.Config.Logger != nil {
+			payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
+		}
 		return gemara.Unknown, "Error while scanning repository for unreviewable binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
-	if len(unreviewableBinaries) == 0 {
-		return gemara.Passed, "No unreviewable binary artifacts were found in the repository", confidence
+	// A positive finding stands regardless of coverage.
+	if len(unreviewableBinaries) > 0 {
+		return gemara.Failed, fmt.Sprintf("Unreviewable binary artifacts found in the repository: %s", strings.Join(unreviewableBinaries, ", ")), gemara.High
 	}
-	return gemara.Failed, fmt.Sprintf("Unreviewable binary artifacts found in the repository: %s", strings.Join(unreviewableBinaries, ", ")), confidence
+	// A clean scan over a truncated tree only covered part of the repository.
+	if truncated {
+		return gemara.NeedsReview, "No unreviewable binary artifacts found in the scanned portion of the repository, but the file tree was too large to scan in full; manual review required.", gemara.Low
+	}
+	return gemara.Passed, "No unreviewable binary artifacts were found in the repository", gemara.High
 }
 
 func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

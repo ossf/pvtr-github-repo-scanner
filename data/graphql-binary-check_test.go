@@ -24,7 +24,7 @@ func TestCheckTreeForBinaries(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		tree     *GraphqlRepoTree
+		tree     *RepoTree
 		expected []string
 	}{
 		{
@@ -34,63 +34,61 @@ func TestCheckTreeForBinaries(t *testing.T) {
 		},
 		{
 			name:     "empty tree returns no binaries",
-			tree:     &GraphqlRepoTree{},
+			tree:     &RepoTree{},
 			expected: nil,
 		},
 		{
 			name: "text files are not flagged as binary",
-			tree: buildTree([]testEntry{
-				{name: "README.md", isBinary: boolPtr(false)},
-				{name: "LICENSE", isBinary: boolPtr(false)},
-				{name: "OWNERS", isBinary: boolPtr(false)},
-				{name: "Tiltfile", isBinary: boolPtr(false)},
-			}),
+			tree: buildRepoTree(
+				blobPath("README.md", modeNonExecutable),
+				blobPath("main.go", modeNonExecutable),
+				blobPath("LICENSE", modeNonExecutable),
+			),
 			expected: nil,
 		},
 		{
-			name: "executable binary files are correctly detected",
-			tree: buildTree([]testEntry{
-				{name: "app.jar", isBinary: boolPtr(true), mode: modeExecutable},
-				{name: "README.md", isBinary: boolPtr(false)},
-			}),
+			name: "executable binary files are detected",
+			tree: buildRepoTree(
+				blobPath("app.jar", modeExecutable),
+				blobPath("README.md", modeNonExecutable),
+			),
 			expected: []string{"app.jar"},
 		},
 		{
 			name: "multiple executable binary files detected",
-			tree: buildTree([]testEntry{
-				{name: "app.exe", isBinary: boolPtr(true), mode: modeExecutable},
-				{name: "lib.dll", isBinary: boolPtr(true), mode: modeExecutable},
-				{name: "main.go", isBinary: boolPtr(false)},
-			}),
+			tree: buildRepoTree(
+				blobPath("app.exe", modeExecutable),
+				blobPath("lib.dll", modeExecutable),
+				blobPath("main.go", modeNonExecutable),
+			),
 			expected: []string{"app.exe", "lib.dll"},
 		},
 		{
-			name: "nested executable binary files detected",
-			tree: buildTreeWithNested(
-				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
-				[]testEntry{{name: "wrapper.jar", isBinary: boolPtr(true), mode: modeExecutable}},
-			),
-			expected: []string{"wrapper.jar"},
-		},
-		{
+			// 05.01 only flags binaries that also carry an execute bit.
 			name: "non-executable binary files not flagged",
-			tree: buildTree([]testEntry{
-				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "diagram.pdf", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "README.md", isBinary: boolPtr(false)},
-			}),
+			tree: buildRepoTree(
+				blobPath("app.exe", modeNonExecutable),
+				blobPath("logo.png", modeNonExecutable),
+				blobPath("diagram.pdf", modeNonExecutable),
+			),
 			expected: nil,
 		},
 		{
-			name: "extensionless text files not flagged",
-			tree: buildTree([]testEntry{
-				{name: "OWNERS", isBinary: boolPtr(false)},
-				{name: "OWNERS_ALIASES", isBinary: boolPtr(false)},
-				{name: "SECURITY_CONTACTS", isBinary: boolPtr(false)},
-				{name: "Tiltfile", isBinary: boolPtr(false)},
-				{name: "dockerignore", isBinary: boolPtr(false)},
-				{name: "TECHNICAL_ADVISORY_MEMBERS", isBinary: boolPtr(false)},
-			}),
+			// The whole point of the REST recursive tree: depth beyond 3 is covered.
+			name: "deeply nested executable binary detected",
+			tree: buildRepoTree(
+				blobPath("README.md", modeNonExecutable),
+				dirPath("cmd"),
+				blobPath("cmd/tool/dist/build/app.exe", modeExecutable),
+			),
+			expected: []string{"cmd/tool/dist/build/app.exe"},
+		},
+		{
+			name: "extensionless files not flagged",
+			tree: buildRepoTree(
+				blobPath("OWNERS", modeNonExecutable),
+				blobPath("Dockerfile", modeNonExecutable),
+			),
 			expected: nil,
 		},
 	}
@@ -98,7 +96,6 @@ func TestCheckTreeForBinaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := checkTreeForBinaries(tt.tree, bc)
-			// TODO: Add expected error test cases
 			if err != nil {
 				t.Errorf("checkTreeForBinaries() error = %v", err)
 				return
@@ -118,7 +115,6 @@ func TestCheckTreeForBinaries(t *testing.T) {
 		})
 	}
 }
-
 func TestBinaryCheckerIsBinary(t *testing.T) {
 	bc := &binaryChecker{logger: hclog.NewNullLogger()}
 
@@ -486,246 +482,16 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.transport.RoundTrip(req)
 }
 
-type testEntry struct {
-	name     string
-	isBinary *bool
-	mode     int
+func blobPath(path string, mode int) RepoTreeEntry {
+	return RepoTreeEntry{Path: path, Mode: mode, Type: "blob"}
 }
 
-func buildTree(entries []testEntry) *GraphqlRepoTree {
-	tree := &GraphqlRepoTree{}
-
-	for _, e := range entries {
-		entry := struct {
-			Name   string
-			Type   string
-			Path   string
-			Mode   int
-			Object *struct {
-				Blob struct {
-					IsBinary    *bool
-					IsTruncated bool
-				} `graphql:"... on Blob"`
-				Tree struct {
-					Entries []struct {
-						Name   string
-						Type   string
-						Path   string
-						Mode   int
-						Object *struct {
-							Blob struct {
-								IsBinary    *bool
-								IsTruncated bool
-							} `graphql:"... on Blob"`
-							Tree struct {
-								Entries []struct {
-									Name   string
-									Type   string
-									Path   string
-									Mode   int
-									Object *struct {
-										Blob struct {
-											IsBinary    *bool
-											IsTruncated bool
-										} `graphql:"... on Blob"`
-									} `graphql:"object"`
-								}
-							} `graphql:"... on Tree"`
-						} `graphql:"object"`
-					}
-				} `graphql:"... on Tree"`
-			} `graphql:"object"`
-		}{
-			Name: e.name,
-			Type: "blob",
-			Path: e.name,
-			Mode: e.mode,
-		}
-		entry.Object = &struct {
-			Blob struct {
-				IsBinary    *bool
-				IsTruncated bool
-			} `graphql:"... on Blob"`
-			Tree struct {
-				Entries []struct {
-					Name   string
-					Type   string
-					Path   string
-					Mode   int
-					Object *struct {
-						Blob struct {
-							IsBinary    *bool
-							IsTruncated bool
-						} `graphql:"... on Blob"`
-						Tree struct {
-							Entries []struct {
-								Name   string
-								Type   string
-								Path   string
-								Mode   int
-								Object *struct {
-									Blob struct {
-										IsBinary    *bool
-										IsTruncated bool
-									} `graphql:"... on Blob"`
-								} `graphql:"object"`
-							}
-						} `graphql:"... on Tree"`
-					} `graphql:"object"`
-				}
-			} `graphql:"... on Tree"`
-		}{}
-		entry.Object.Blob.IsBinary = e.isBinary
-
-		tree.Repository.Object.Tree.Entries = append(tree.Repository.Object.Tree.Entries, entry)
-	}
-
-	return tree
+func dirPath(path string) RepoTreeEntry {
+	return RepoTreeEntry{Path: path, Type: "tree"}
 }
 
-func buildTreeWithNested(rootEntries []testEntry, subEntries []testEntry) *GraphqlRepoTree {
-	tree := buildTree(rootEntries)
-
-	dirEntry := struct {
-		Name   string
-		Type   string
-		Path   string
-		Mode   int
-		Object *struct {
-			Blob struct {
-				IsBinary    *bool
-				IsTruncated bool
-			} `graphql:"... on Blob"`
-			Tree struct {
-				Entries []struct {
-					Name   string
-					Type   string
-					Path   string
-					Mode   int
-					Object *struct {
-						Blob struct {
-							IsBinary    *bool
-							IsTruncated bool
-						} `graphql:"... on Blob"`
-						Tree struct {
-							Entries []struct {
-								Name   string
-								Type   string
-								Path   string
-								Mode   int
-								Object *struct {
-									Blob struct {
-										IsBinary    *bool
-										IsTruncated bool
-									} `graphql:"... on Blob"`
-								} `graphql:"object"`
-							}
-						} `graphql:"... on Tree"`
-					} `graphql:"object"`
-				}
-			} `graphql:"... on Tree"`
-		} `graphql:"object"`
-	}{
-		Name: "subdir",
-		Type: "tree",
-		Path: "subdir",
-	}
-
-	dirEntry.Object = &struct {
-		Blob struct {
-			IsBinary    *bool
-			IsTruncated bool
-		} `graphql:"... on Blob"`
-		Tree struct {
-			Entries []struct {
-				Name   string
-				Type   string
-				Path   string
-				Mode   int
-				Object *struct {
-					Blob struct {
-						IsBinary    *bool
-						IsTruncated bool
-					} `graphql:"... on Blob"`
-					Tree struct {
-						Entries []struct {
-							Name   string
-							Type   string
-							Path   string
-							Mode   int
-							Object *struct {
-								Blob struct {
-									IsBinary    *bool
-									IsTruncated bool
-								} `graphql:"... on Blob"`
-							} `graphql:"object"`
-						}
-					} `graphql:"... on Tree"`
-				} `graphql:"object"`
-			}
-		} `graphql:"... on Tree"`
-	}{}
-
-	for _, e := range subEntries {
-		subEntry := struct {
-			Name   string
-			Type   string
-			Path   string
-			Mode   int
-			Object *struct {
-				Blob struct {
-					IsBinary    *bool
-					IsTruncated bool
-				} `graphql:"... on Blob"`
-				Tree struct {
-					Entries []struct {
-						Name   string
-						Type   string
-						Path   string
-						Mode   int
-						Object *struct {
-							Blob struct {
-								IsBinary    *bool
-								IsTruncated bool
-							} `graphql:"... on Blob"`
-						} `graphql:"object"`
-					}
-				} `graphql:"... on Tree"`
-			} `graphql:"object"`
-		}{
-			Name: e.name,
-			Type: "blob",
-			Path: "subdir/" + e.name,
-			Mode: e.mode,
-		}
-		subEntry.Object = &struct {
-			Blob struct {
-				IsBinary    *bool
-				IsTruncated bool
-			} `graphql:"... on Blob"`
-			Tree struct {
-				Entries []struct {
-					Name   string
-					Type   string
-					Path   string
-					Mode   int
-					Object *struct {
-						Blob struct {
-							IsBinary    *bool
-							IsTruncated bool
-						} `graphql:"... on Blob"`
-					} `graphql:"object"`
-				}
-			} `graphql:"... on Tree"`
-		}{}
-		subEntry.Object.Blob.IsBinary = e.isBinary
-
-		dirEntry.Object.Tree.Entries = append(dirEntry.Object.Tree.Entries, subEntry)
-	}
-
-	tree.Repository.Object.Tree.Entries = append(tree.Repository.Object.Tree.Entries, dirEntry)
-
-	return tree
+func buildRepoTree(entries ...RepoTreeEntry) *RepoTree {
+	return &RepoTree{Entries: entries}
 }
 
 func TestAcceptableBinaryExtension(t *testing.T) {
@@ -930,7 +696,7 @@ func TestCheckTreeForUnreviewableBinaries(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		tree     *GraphqlRepoTree
+		tree     *RepoTree
 		expected []string
 	}{
 		{
@@ -939,67 +705,56 @@ func TestCheckTreeForUnreviewableBinaries(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "empty tree returns no binaries",
-			tree:     &GraphqlRepoTree{},
-			expected: nil,
-		},
-		{
 			name: "text files not flagged",
-			tree: buildTree([]testEntry{
-				{name: "README.md", isBinary: boolPtr(false)},
-				{name: "main.go", isBinary: boolPtr(false)},
-			}),
+			tree: buildRepoTree(
+				blobPath("README.md", modeNonExecutable),
+				blobPath("main.go", modeNonExecutable),
+			),
 			expected: nil,
 		},
 		{
 			name: "acceptable binary files not flagged",
-			tree: buildTree([]testEntry{
-				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "icon.ico", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "doc.pdf", isBinary: boolPtr(true), mode: modeNonExecutable},
-			}),
+			tree: buildRepoTree(
+				blobPath("logo.png", modeNonExecutable),
+				blobPath("icon.ico", modeNonExecutable),
+				blobPath("doc.pdf", modeNonExecutable),
+				blobPath("font.woff2", modeNonExecutable),
+			),
 			expected: nil,
 		},
 		{
+			// Unreviewable artifacts are flagged regardless of the execute bit.
 			name: "unreviewable binary files flagged",
-			tree: buildTree([]testEntry{
-				{name: "app.jar", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "lib.dll", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "README.md", isBinary: boolPtr(false)},
-			}),
-			expected: []string{"app.jar", "lib.dll"},
+			tree: buildRepoTree(
+				blobPath("app.jar", modeNonExecutable),
+				blobPath("lib.dll", modeNonExecutable),
+				blobPath("bundle.zip", modeNonExecutable),
+				blobPath("README.md", modeNonExecutable),
+			),
+			expected: []string{"app.jar", "lib.dll", "bundle.zip"},
 		},
 		{
 			name: "mix of acceptable and unreviewable binaries",
-			tree: buildTree([]testEntry{
-				{name: "logo.png", isBinary: boolPtr(true), mode: modeNonExecutable},
-				{name: "app.exe", isBinary: boolPtr(true), mode: modeExecutable},
-				{name: "font.woff2", isBinary: boolPtr(true), mode: modeNonExecutable},
-			}),
+			tree: buildRepoTree(
+				blobPath("logo.png", modeNonExecutable),
+				blobPath("app.exe", modeExecutable),
+				blobPath("font.woff2", modeNonExecutable),
+			),
 			expected: []string{"app.exe"},
 		},
 		{
-			name: "nested unreviewable binary detected",
-			tree: buildTreeWithNested(
-				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
-				[]testEntry{{name: "wrapper.jar", isBinary: boolPtr(true), mode: modeNonExecutable}},
+			// Deep artifacts the old 3-level scan could not reach.
+			name: "deeply nested unreviewable binary detected",
+			tree: buildRepoTree(
+				blobPath("README.md", modeNonExecutable),
+				blobPath("vendor/a/b/c/d/hidden.so", modeNonExecutable),
 			),
-			expected: []string{"wrapper.jar"},
-		},
-		{
-			name: "level 3 nested unreviewable binary detected",
-			tree: buildTreeWithLevel3(
-				[]testEntry{{name: "README.md", isBinary: boolPtr(false)}},
-				[]testEntry{},
-				[]testEntry{{name: "hidden.dll", isBinary: boolPtr(true), mode: modeNonExecutable}},
-			),
-			expected: []string{"hidden.dll"},
+			expected: []string{"vendor/a/b/c/d/hidden.so"},
 		},
 		{
 			name: "acceptable binary in nested subtree not flagged",
-			tree: buildTreeWithNested(
-				[]testEntry{},
-				[]testEntry{{name: "photo.jpg", isBinary: boolPtr(true), mode: modeNonExecutable}},
+			tree: buildRepoTree(
+				blobPath("assets/img/deep/photo.jpg", modeNonExecutable),
 			),
 			expected: nil,
 		},
@@ -1027,101 +782,6 @@ func TestCheckTreeForUnreviewableBinaries(t *testing.T) {
 		})
 	}
 }
-
-func buildTreeWithLevel3(rootEntries []testEntry, level2Entries []testEntry, level3Entries []testEntry) *GraphqlRepoTree {
-	tree := buildTreeWithNested(rootEntries, level2Entries)
-
-	// Find the "subdir" tree entry added by buildTreeWithNested
-	for i := range tree.Repository.Object.Tree.Entries {
-		if tree.Repository.Object.Tree.Entries[i].Type == "tree" {
-			// Add a sub-subtree inside it
-			subDirEntry := struct {
-				Name   string
-				Type   string
-				Path   string
-				Mode   int
-				Object *struct {
-					Blob struct {
-						IsBinary    *bool
-						IsTruncated bool
-					} `graphql:"... on Blob"`
-					Tree struct {
-						Entries []struct {
-							Name   string
-							Type   string
-							Path   string
-							Mode   int
-							Object *struct {
-								Blob struct {
-									IsBinary    *bool
-									IsTruncated bool
-								} `graphql:"... on Blob"`
-							} `graphql:"object"`
-						}
-					} `graphql:"... on Tree"`
-				} `graphql:"object"`
-			}{
-				Name: "deep",
-				Type: "tree",
-				Path: "subdir/deep",
-			}
-			subDirEntry.Object = &struct {
-				Blob struct {
-					IsBinary    *bool
-					IsTruncated bool
-				} `graphql:"... on Blob"`
-				Tree struct {
-					Entries []struct {
-						Name   string
-						Type   string
-						Path   string
-						Mode   int
-						Object *struct {
-							Blob struct {
-								IsBinary    *bool
-								IsTruncated bool
-							} `graphql:"... on Blob"`
-						} `graphql:"object"`
-					}
-				} `graphql:"... on Tree"`
-			}{}
-
-			for _, e := range level3Entries {
-				l3Entry := struct {
-					Name   string
-					Type   string
-					Path   string
-					Mode   int
-					Object *struct {
-						Blob struct {
-							IsBinary    *bool
-							IsTruncated bool
-						} `graphql:"... on Blob"`
-					} `graphql:"object"`
-				}{
-					Name: e.name,
-					Type: "blob",
-					Path: "subdir/deep/" + e.name,
-					Mode: e.mode,
-				}
-				l3Entry.Object = &struct {
-					Blob struct {
-						IsBinary    *bool
-						IsTruncated bool
-					} `graphql:"... on Blob"`
-				}{}
-				l3Entry.Object.Blob.IsBinary = e.isBinary
-				subDirEntry.Object.Tree.Entries = append(subDirEntry.Object.Tree.Entries, l3Entry)
-			}
-
-			tree.Repository.Object.Tree.Entries[i].Object.Tree.Entries = append(
-				tree.Repository.Object.Tree.Entries[i].Object.Tree.Entries, subDirEntry)
-			break
-		}
-	}
-	return tree
-}
-
 func TestCheckUnreviewablePartialFetchError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

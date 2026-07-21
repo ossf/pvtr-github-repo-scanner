@@ -23,17 +23,9 @@ type Payload struct {
 	DependencyManifestsCount int
 	IsCodeRepo               bool
 	SecurityPosture          SecurityPosture
-	Binaries                 BinaryAnalysis
 	client                   *githubv4.Client
 	httpClient               *http.Client
 	cache                    *payloadCache
-}
-
-// BinaryAnalysis holds information about binaries found in the repo
-type BinaryAnalysis struct {
-	Suspected    []string // OSPS-QA-05.01: suspected executable binary artifacts
-	Unreviewable []string // OSPS-QA-05.02: unreviewable binary artifacts
-	Err          error
 }
 
 // payloadCache holds lazily-fetched data shared by every step. Steps receive the
@@ -48,6 +40,7 @@ type BinaryAnalysis struct {
 // signal a guarantee that does not exist. If steps ever run in parallel, this
 // should fail loudly under -race rather than half-work.
 type payloadCache struct {
+	tree      *RepoTree
 	workflows []WorkflowFile
 	// set once workflows have been fetched, so an empty result is not refetched
 	workflowsLoaded bool
@@ -61,28 +54,22 @@ func Loader(config *config.Config) (payload any, err error) {
 	)))
 
 	ghClient := github.NewClient(httpClient)
-	gqlClient := githubv4.NewClient(httpClient)
 	owner := config.GetString("owner")
 	repo := config.GetString("repo")
 
 	var (
 		graphql            *GraphqlRepoData
+		client             *githubv4.Client
 		ghRepo             *github.Repository
 		repositoryMetadata RepositoryMetadata
 		isCodeRepo         bool
-		tree               *GraphqlRepoTree
-		treeErr            error
 	)
 	rest := newRestData(ghClient, httpClient, config)
 
 	g := new(errgroup.Group)
 	g.Go(func() (err error) {
-		graphql, err = getGraphqlRepoData(config, gqlClient, owner, repo)
+		graphql, client, err = getGraphqlRepoData(config, httpClient, owner, repo)
 		return err
-	})
-	g.Go(func() error {
-		tree, treeErr = fetchGraphqlRepoTree(config, gqlClient, "HEAD")
-		return nil
 	})
 	g.Go(func() (err error) {
 		ghRepo, repositoryMetadata, err = loadRepositoryMetadata(ghClient, owner, repo)
@@ -99,8 +86,6 @@ func Loader(config *config.Config) (payload any, err error) {
 		return nil, err
 	}
 
-	binaries := analyzeBinaries(tree, treeErr, httpClient, config, owner, repo, graphql.Repository.DefaultBranchRef.Name)
-
 	securityPosture, err := buildSecurityPosture(ghRepo, *rest)
 	if err != nil {
 		return nil, err
@@ -113,16 +98,17 @@ func Loader(config *config.Config) (payload any, err error) {
 		RepositoryMetadata:       repositoryMetadata,
 		DependencyManifestsCount: graphql.Repository.DependencyGraphManifests.TotalCount,
 		IsCodeRepo:               isCodeRepo,
+		client:                   client,
 		httpClient:               httpClient,
 		APICallCounter:           callCounter,
 		SecurityPosture:          securityPosture,
-		Binaries:                 binaries,
-		client:                   gqlClient,
 		cache:                    &payloadCache{},
 	}), nil
 }
 
-func getGraphqlRepoData(config *config.Config, client *githubv4.Client, owner, repo string) (data *GraphqlRepoData, err error) {
+func getGraphqlRepoData(config *config.Config, httpClient *http.Client, owner, repo string) (data *GraphqlRepoData, client *githubv4.Client, err error) {
+	client = githubv4.NewClient(httpClient)
+
 	variables := map[string]any{
 		"owner": githubv4.String(owner),
 		"name":  githubv4.String(repo),
@@ -135,7 +121,7 @@ func getGraphqlRepoData(config *config.Config, client *githubv4.Client, owner, r
 	if err != nil {
 		config.Logger.Error(fmt.Sprintf("Error querying GitHub GraphQL API: %s", err.Error()))
 	}
-	return data, err
+	return data, client, err
 }
 
 // newRestData builds the REST accessor on the shared httpClient so its raw
@@ -156,28 +142,33 @@ func newRestData(ghClient *github.Client, httpClient *http.Client, config *confi
 	}
 }
 
-// analyzeBinaries walks over the fetched tree, feeds the binaryChecker's
-// raw-content fallback for blobs GitHub could not classify.
-func analyzeBinaries(tree *GraphqlRepoTree, treeErr error, httpClient *http.Client, cfg *config.Config, owner, repo, branch string) BinaryAnalysis {
-	if treeErr != nil {
-		return BinaryAnalysis{Err: treeErr}
+// newBinaryChecker creates a binaryChecker configured from the payload's
+// repository metadata and HTTP client.
+func (p *Payload) newBinaryChecker() *binaryChecker {
+	return &binaryChecker{
+		httpClient: p.httpClient,
+		logger:     p.Config.Logger,
+		owner:      p.Config.GetString("owner"),
+		repo:       p.Config.GetString("repo"),
+		branch:     p.Repository.DefaultBranchRef.Name,
 	}
-	bc := &binaryChecker{
-		httpClient: httpClient,
-		logger:     cfg.Logger,
-		owner:      owner,
-		repo:       repo,
-		branch:     branch,
+}
+
+// getTree lazily fetches and caches the full repository tree so that multiple
+// checks (e.g. QA-05.01 and QA-05.02) share a single REST API call.
+func (p *Payload) getTree() (*RepoTree, error) {
+	if p.cache != nil && p.cache.tree != nil {
+		return p.cache.tree, nil
 	}
-	suspected, err := checkTreeForBinaries(tree, bc)
+	if p.GraphqlRepoData == nil || p.RestData == nil || p.ghClient == nil || p.Config == nil || p.cache == nil {
+		return nil, fmt.Errorf("payload missing required repository data")
+	}
+	tree, err := fetchRestRepoTree(p.ghClient, p.Config.GetString("owner"), p.Config.GetString("repo"), p.Repository.DefaultBranchRef.Name)
 	if err != nil {
-		return BinaryAnalysis{Err: err}
+		return nil, err
 	}
-	unreviewable, err := checkTreeForUnreviewableBinaries(tree, bc)
-	if err != nil {
-		return BinaryAnalysis{Err: err}
-	}
-	return BinaryAnalysis{Suspected: suspected, Unreviewable: unreviewable}
+	p.cache.tree = tree
+	return tree, nil
 }
 
 // GetWorkflowFiles returns the decoded contents of every file in
@@ -197,4 +188,31 @@ func (p *Payload) GetWorkflowFiles() ([]WorkflowFile, error) {
 	p.cache.workflows = files
 	p.cache.workflowsLoaded = true
 	return files, nil
+}
+
+// GetSuspectedBinaries fetches the repository tree and returns paths that appear
+// to be executable binary artifacts per OSPS-QA-05.01. The truncated return
+// reports whether the tree was too large for GitHub to return in full, so a
+// clean scan covers only part of the repository.
+func (p *Payload) GetSuspectedBinaries() (suspectedBinaries []string, truncated bool, err error) {
+	tree, err := p.getTree()
+	if err != nil {
+		return nil, false, err
+	}
+	flagged, err := checkTreeForBinaries(tree, p.newBinaryChecker())
+	return flagged, tree.Truncated, err
+}
+
+// GetUnreviewableBinaries fetches the repository tree and returns paths that are
+// unreviewable binary artifacts per OSPS-QA-05.02. This differs from
+// GetSuspectedBinaries by flagging all binaries except acceptable content types
+// like images, audio, video, fonts, and PDFs. The truncated return has the same
+// meaning as in GetSuspectedBinaries.
+func (p *Payload) GetUnreviewableBinaries() (unreviewableBinaries []string, truncated bool, err error) {
+	tree, err := p.getTree()
+	if err != nil {
+		return nil, false, err
+	}
+	flagged, err := checkTreeForUnreviewableBinaries(tree, p.newBinaryChecker())
+	return flagged, tree.Truncated, err
 }

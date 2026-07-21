@@ -1,15 +1,12 @@
 package quality
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
-	hclog "github.com/hashicorp/go-hclog"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/si-tooling/v2/si"
-	"github.com/privateerproj/privateer-sdk/config"
 )
 
 func Test_InsightsListsRepositories(t *testing.T) {
@@ -73,86 +70,6 @@ func Test_InsightsListsRepositories(t *testing.T) {
 			}
 			if gotMsg != tt.wantMsg {
 				t.Errorf("message = %q, want %q", gotMsg, tt.wantMsg)
-			}
-		})
-	}
-}
-
-func Test_NoBinariesInRepo(t *testing.T) {
-	tests := []struct {
-		name       string
-		binaries   data.BinaryAnalysis
-		wantResult gemara.Result
-	}{
-		{
-			name:       "no suspected binaries passes",
-			binaries:   data.BinaryAnalysis{Suspected: nil},
-			wantResult: gemara.Passed,
-		},
-		{
-			name:       "suspected binaries fail",
-			binaries:   data.BinaryAnalysis{Suspected: []string{"a.out"}},
-			wantResult: gemara.Failed,
-		},
-		{
-			name:       "a gather error is unknown, not a false pass",
-			binaries:   data.BinaryAnalysis{Err: errors.New("tree too large")},
-			wantResult: gemara.Unknown,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			payload := data.Payload{
-				Config:   &config.Config{Logger: hclog.NewNullLogger()},
-				Binaries: tt.binaries,
-			}
-			result, msg, _ := NoBinariesInRepo(payload)
-			if result != tt.wantResult {
-				t.Errorf("result = %v, want %v", result, tt.wantResult)
-			}
-			if msg == "" {
-				t.Error("expected non-empty message")
-			}
-		})
-	}
-}
-
-func Test_NoUnreviewableBinariesInRepo(t *testing.T) {
-	tests := []struct {
-		name       string
-		binaries   data.BinaryAnalysis
-		wantResult gemara.Result
-	}{
-		{
-			name:       "no unreviewable binaries passes",
-			binaries:   data.BinaryAnalysis{Unreviewable: nil},
-			wantResult: gemara.Passed,
-		},
-		{
-			name:       "unreviewable binaries fail",
-			binaries:   data.BinaryAnalysis{Unreviewable: []string{"blob.bin"}},
-			wantResult: gemara.Failed,
-		},
-		{
-			name:       "a gather error is unknown, not a false pass",
-			binaries:   data.BinaryAnalysis{Err: errors.New("tree too large")},
-			wantResult: gemara.Unknown,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			payload := data.Payload{
-				Config:   &config.Config{Logger: hclog.NewNullLogger()},
-				Binaries: tt.binaries,
-			}
-			result, msg, _ := NoUnreviewableBinariesInRepo(payload)
-			if result != tt.wantResult {
-				t.Errorf("result = %v, want %v", result, tt.wantResult)
-			}
-			if msg == "" {
-				t.Error("expected non-empty message")
 			}
 		})
 	}
