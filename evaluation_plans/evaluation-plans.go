@@ -96,6 +96,10 @@ var (
 			reusable_steps.IsCodeRepo,
 			docs.HasDependencyManagementPolicy,
 		},
+		"OSPS-DO-07.01": {
+			reusable_steps.IsCodeRepo,
+			docs.HasBuildInstructions,
+		},
 		"OSPS-GV-01.01": {
 			reusable_steps.IsActive,
 			governance.CoreTeamIsListed,

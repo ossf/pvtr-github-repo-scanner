@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
+	"github.com/google/go-github/v74/github"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/si-tooling/v2/si"
 	"github.com/stretchr/testify/assert"
@@ -70,6 +71,46 @@ func TestAcceptsVulnReports(t *testing.T) {
 			result, message, _ := AcceptsVulnReports(payload)
 			assert.Equal(t, test.expectedResult, result)
 			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
+func TestHasBuildInstructions(t *testing.T) {
+	dummyGithubDir := []*github.RepositoryContent{
+		{Type: github.Ptr("file"), Name: github.Ptr("PULL_REQUEST_TEMPLATE.md"), Path: github.Ptr(".github/PULL_REQUEST_TEMPLATE.md")},
+	}
+
+	tests := []struct {
+		name           string
+		toplevel       []*github.RepositoryContent
+		expectedResult gemara.Result
+	}{
+		{
+			name: "build documentation present",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("Makefile"), Path: github.Ptr("Makefile")},
+			},
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "no build documentation",
+			toplevel:       []*github.RepositoryContent{},
+			expectedResult: gemara.Failed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := data.NewPayloadWithRepoContents(
+				data.Payload{},
+				tt.toplevel,
+				map[string][]*github.RepositoryContent{".github": dummyGithubDir},
+			)
+
+			result, message, _ := HasBuildInstructions(payload)
+
+			assert.Equal(t, tt.expectedResult, result)
+			assert.NotEmpty(t, message)
 		})
 	}
 }
