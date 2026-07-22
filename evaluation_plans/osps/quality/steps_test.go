@@ -318,3 +318,27 @@ func TestTestExecutionDocumentationEvidence(t *testing.T) {
 		t.Fatal("expected an error when no documentation is available")
 	}
 }
+
+// TestTestExecutionDocumentationEvidenceFetchError verifies that a transient
+// README fetch failure is surfaced as an error rather than silently dropped.
+// Because the caller routes evidence-load errors to AIFallback (NeedsReview),
+// this prevents an infra hiccup from making the AI judge on partial evidence
+// and return a false-negative Failed for the single-step OSPS-QA-06.02 control.
+func TestTestExecutionDocumentationEvidenceFetchError(t *testing.T) {
+	fetchErr := errors.New("boom: github unavailable")
+	payload := data.Payload{
+		GraphqlRepoData: &data.GraphqlRepoData{},
+		RestData:        data.NewRestDataWithFailingClient(fetchErr),
+	}
+	payload.Repository.Object.Tree.Entries = []struct {
+		Name string
+		Type string
+		Path string
+	}{
+		{Name: "README.md", Type: "blob", Path: "README.md"},
+	}
+
+	if _, _, err := testExecutionDocumentationEvidence(payload); err == nil {
+		t.Fatal("expected an error when the README fetch fails, got nil")
+	}
+}

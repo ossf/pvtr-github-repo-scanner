@@ -256,7 +256,11 @@ func DocumentsTestMaintenancePolicy(payload data.Payload) (result gemara.Result,
 func testExecutionDocumentationEvidence(payload data.Payload) (material string, sources []string, err error) {
 	var parts []string
 
-	if readme := strings.TrimSpace(testExecutionDocumentationReadmeContent(payload)); readme != "" {
+	readme, err := testExecutionDocumentationReadmeContent(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	if readme = strings.TrimSpace(readme); readme != "" {
 		parts = append(parts, "README\n"+readme)
 		if readmePath := testExecutionDocumentationReadmePath(payload); readmePath != "" {
 			sources = append(sources, testExecutionDocumentationEvidenceSource(payload, readmePath))
@@ -319,27 +323,35 @@ func testExecutionDocumentationRepoAbsolutePath(path string) string {
 	return "/" + strings.TrimLeft(trimmed, "/")
 }
 
-func testExecutionDocumentationReadmeContent(payload data.Payload) string {
+// testExecutionDocumentationReadmeContent returns the README body for AI
+// evidence. It distinguishes "README absent" (empty string, nil error, so the
+// caller simply skips it) from a transient fetch/decode failure (non-nil
+// error). Propagating the error lets the caller route infra hiccups to manual
+// review instead of judging on partial evidence and returning a false negative.
+func testExecutionDocumentationReadmeContent(payload data.Payload) (string, error) {
 	if payload.GraphqlRepoData == nil || payload.RestData == nil {
-		return ""
+		return "", nil
 	}
 
 	readmePath := testExecutionDocumentationReadmePath(payload)
 	if readmePath == "" {
-		return ""
+		return "", nil
 	}
 
 	content, err := payload.GetFileContent(readmePath)
-	if err != nil || content == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve README content at %s: %w", readmePath, err)
+	}
+	if content == nil {
+		return "", fmt.Errorf("no README content returned for %s", readmePath)
 	}
 
 	readme, err := content.GetContent()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("failed to decode README content at %s: %w", readmePath, err)
 	}
 
-	return strings.TrimSpace(readme)
+	return strings.TrimSpace(readme), nil
 }
 
 func testExecutionDocumentationReadmePath(payload data.Payload) string {
