@@ -172,7 +172,7 @@ var (
 			quality.HasOneOrMoreStatusChecks,
 		},
 		"OSPS-QA-06.02": {
-			quality.DocumentsTestExecution,
+			quality.TestExecutionDocumentation,
 		},
 		"OSPS-QA-06.03": {
 			reusable_steps.IsCodeRepo,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gemaraproj/go-gemara"
 	"github.com/google/go-github/v74/github"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/privateerproj/privateer-sdk/pluginkit"
@@ -17,16 +18,16 @@ type Payload struct {
 	*GraphqlRepoData
 	*RestData
 	*pluginkit.APICallCounter // Enable Privateer benchmarking for API calls
-
-	Config                   *config.Config
-	RepositoryMetadata       RepositoryMetadata
-	DependencyManifestsCount int
-	IsCodeRepo               bool
-	SecurityPosture          SecurityPosture
-	Binaries                 BinaryAnalysis
-	client                   *githubv4.Client
-	httpClient               *http.Client
-	cache                    *payloadCache
+	Evidence                  *gemara.EvidenceCollector
+	Config                    *config.Config
+	RepositoryMetadata        RepositoryMetadata
+	DependencyManifestsCount  int
+	IsCodeRepo                bool
+	SecurityPosture           SecurityPosture
+	Binaries                  BinaryAnalysis
+	client                    *githubv4.Client
+	httpClient                *http.Client
+	cache                     *payloadCache
 }
 
 // BinaryAnalysis holds information about binaries found in the repo
@@ -51,6 +52,27 @@ type payloadCache struct {
 	workflows []WorkflowFile
 	// set once workflows have been fetched, so an empty result is not refetched
 	workflowsLoaded bool
+}
+
+// AddEvidence, GetEvidence, and ClearEvidence implement gemara.HasEvidence.
+// Nil-safe: a payload without a collector silently drops evidence.
+func (p Payload) AddEvidence(evidence gemara.Evidence) {
+	if p.Evidence != nil {
+		p.Evidence.AddEvidence(evidence)
+	}
+}
+
+func (p Payload) GetEvidence() []gemara.Evidence {
+	if p.Evidence == nil {
+		return nil
+	}
+	return p.Evidence.GetEvidence()
+}
+
+func (p Payload) ClearEvidence() {
+	if p.Evidence != nil {
+		p.Evidence.ClearEvidence()
+	}
 }
 
 func Loader(config *config.Config) (payload any, err error) {
@@ -109,6 +131,7 @@ func Loader(config *config.Config) (payload any, err error) {
 	return any(Payload{
 		GraphqlRepoData:          graphql,
 		RestData:                 rest,
+		Evidence:                 &gemara.EvidenceCollector{},
 		Config:                   config,
 		RepositoryMetadata:       repositoryMetadata,
 		DependencyManifestsCount: graphql.Repository.DependencyGraphManifests.TotalCount,

@@ -140,6 +140,20 @@ func (r *RestData) getSourceFile(owner, repo, path string) (content *github.Repo
 	return content, nil
 }
 
+// GetFileContent retrieves the repository content at path. It returns an error
+// when the fetch fails or when no file is found, so callers can distinguish a
+// transient failure from an absent file.
+func (r *RestData) GetFileContent(path string) (content *github.RepositoryContent, err error) {
+	content, err = r.getSourceFile(r.owner, r.repo, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve file content for %s: %w", path, err)
+	}
+	if content == nil {
+		return nil, fmt.Errorf("file not found at %s", path)
+	}
+	return content, nil
+}
+
 // checkFile accepts a filename like security-insights.yml or security.md and returns the path to that file
 // if it exists in the root directory or forge directory of the repository or returns "" when the file is not found
 func (r *RestData) checkFile(filename string) (filepath string) {
