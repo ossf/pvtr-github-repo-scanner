@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/go-github/v74/github"
@@ -10,6 +11,7 @@ import (
 	"github.com/migueleliasweb/go-github-mock/src/mock"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckFile(t *testing.T) {
@@ -85,49 +87,6 @@ func TestCheckFile(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-func TestGetSubdirContentByPath(t *testing.T) {
-	subContent := RepoContent{
-		Content: []*github.RepositoryContent{
-			{Name: github.Ptr("workflow.yaml"), Type: github.Ptr("file"), Path: github.Ptr(".github/workflows/workflow.yaml")},
-		},
-	}
-
-	root := RepoContent{
-		SubContent: map[string]RepoContent{
-			".github": {
-				SubContent: map[string]RepoContent{
-					"workflows": subContent,
-				},
-			},
-		},
-	}
-
-	restData := &RestData{
-		owner: "test-owner",
-		repo:  "test-repo",
-	}
-
-	t.Run("successful path", func(t *testing.T) {
-		result, err := root.GetSubdirContentByPath(restData, ".github/workflows")
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(result.Content))
-		assert.Equal(t, "workflow.yaml", *result.Content[0].Name)
-	})
-
-	t.Run("nonexistent path", func(t *testing.T) {
-		_, err := root.GetSubdirContentByPath(restData, ".github/nonexistent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "directory 'nonexistent' not found")
-	})
-
-	t.Run("no subdirectories", func(t *testing.T) {
-		emptyRoot := RepoContent{}
-		_, err := emptyRoot.GetSubdirContentByPath(restData, ".github")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no subdirectories found")
-	})
 }
 
 func TestHasBuildInstructionHeading(t *testing.T) {
@@ -354,4 +313,91 @@ func TestIsCodeRepo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetSubdirContentsCaching(t *testing.T) {
+	newRestData := func(t *testing.T, body string) (*RestData, *int) {
+		t.Helper()
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(server.Close)
+
+		ghClient, err := github.NewClient(server.Client()).WithEnterpriseURLs(server.URL, server.URL)
+		require.NoError(t, err)
+		return &RestData{
+			owner:    "test-owner",
+			repo:     "test-repo",
+			ghClient: ghClient,
+			Config:   &config.Config{Logger: hclog.NewNullLogger()},
+		}, &calls
+	}
+
+	t.Run("a populated directory is fetched once", func(t *testing.T) {
+		restData, calls := newRestData(t, `[{"name":"workflows","path":".github/workflows","type":"dir"}]`)
+
+		first, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Len(t, first.Content, 1)
+
+		second, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Equal(t, first.Content, second.Content)
+		assert.Equal(t, 1, *calls, "second lookup should be served from cache")
+	})
+
+	t.Run("an empty directory is also cached", func(t *testing.T) {
+		// Regression guard: keying the cache check on a non-empty result meant
+		// an empty directory refetched on every probe.
+		restData, calls := newRestData(t, `[]`)
+
+		_, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		_, err = restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Equal(t, 1, *calls, "an empty directory is a real answer worth caching")
+	})
+
+	t.Run("a directory absent from the root listing is never fetched", func(t *testing.T) {
+		// Errors are not cached, so without consulting the root listing a repo
+		// with no .github directory pays a 404 on every checkFile probe.
+		restData, calls := newRestData(t, `[]`)
+		restData.contents.Content = []*github.RepositoryContent{
+			{Name: github.Ptr("README.md"), Path: github.Ptr("README.md"), Type: github.Ptr("file")},
+			{Name: github.Ptr("src"), Path: github.Ptr("src"), Type: github.Ptr("dir")},
+		}
+
+		_, err := restData.getSubdirContents(".github")
+		assert.Error(t, err)
+		_, err = restData.getSubdirContents(".github")
+		assert.Error(t, err)
+		assert.Equal(t, 0, *calls, "a directory the root listing rules out needs no API call")
+	})
+
+	t.Run("an unavailable root listing still falls through to the API", func(t *testing.T) {
+		// A failed root fetch must not be read as "no directories exist".
+		restData, calls := newRestData(t, `[{"name":"workflows","path":".github/workflows","type":"dir"}]`)
+
+		_, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Equal(t, 1, *calls)
+	})
+
+	t.Run("a directory present in the root listing is fetched", func(t *testing.T) {
+		// The production happy path: the root listing records .github as a
+		// directory, so the guard lets the fetch through and caches it.
+		restData, calls := newRestData(t, `[{"name":"workflows","path":".github/workflows","type":"dir"}]`)
+		restData.contents.Content = []*github.RepositoryContent{
+			{Name: github.Ptr("README.md"), Path: github.Ptr("README.md"), Type: github.Ptr("file")},
+			{Name: github.Ptr(".github"), Path: github.Ptr(".github"), Type: github.Ptr("dir")},
+		}
+
+		result, err := restData.getSubdirContents(".github")
+		require.NoError(t, err)
+		assert.Len(t, result.Content, 1)
+		assert.Equal(t, 1, *calls, "a directory the root listing confirms is fetched once")
+	})
 }

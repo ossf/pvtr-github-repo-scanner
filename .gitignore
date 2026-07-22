@@ -24,3 +24,6 @@ tmp/
 
 # ignore local git worktrees
 .worktrees/
+
+# github issue template config
+!.github/ISSUE_TEMPLATE/config.yml

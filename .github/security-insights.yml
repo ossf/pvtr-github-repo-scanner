@@ -1,0 +1,90 @@
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-07-15'
+  last-reviewed: '2026-07-15'
+  url: https://github.com/ossf/pvtr-github-repo-scanner
+  comment: |
+    Security Insights for the Privateer GitHub repository scanner plugin, an
+    OpenSSF project that performs automated OSPS Baseline assessments.
+
+project:
+  name: Privateer Plugin for GitHub Repositories
+  homepage: https://github.com/ossf/pvtr-github-repo-scanner
+  steward:
+    uri: https://openssf.org
+    comment: |
+      This project is maintained under the Open Source Security Foundation (OpenSSF).
+  administrators:
+    - name: OpenSSF Operations Team
+      affiliation: OpenSSF
+      email: operations@openssf.org
+      primary: true
+  # OSPS-QA-04.01: Insights must contain a list of repositories.
+  repositories:
+    - name: pvtr-github-repo-scanner
+      url: https://github.com/ossf/pvtr-github-repo-scanner
+      comment: |
+        The GitHub repository scanner plugin for the Privateer framework. This
+        is the core and only repository for the project.
+  # OSPS-DO-02.01 / OSPS-VM-02.01: the project accepts vulnerability reports and
+  # publishes a security contact.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    contact:
+      name: OpenSSF Operations Team
+      affiliation: OpenSSF
+      email: security@openssf.org
+      primary: true
+    comment: |
+      Report suspected vulnerabilities privately to the security contact above,
+      or via GitHub's private vulnerability reporting on this repository.
+  # OSPS-DO-01.01: a user guide must be specified in Security Insights data.
+  documentation:
+    detailed-guide: https://github.com/ossf/pvtr-github-repo-scanner/blob/main/README.md
+    quickstart-guide: https://github.com/ossf/pvtr-github-repo-scanner/blob/main/README.md#local-usage
+    code-of-conduct: https://github.com/ossf/pvtr-github-repo-scanner/blob/main/.github/CODE_OF_CONDUCT.md
+
+repository:
+  url: https://github.com/ossf/pvtr-github-repo-scanner
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  core-team:
+    - name: Eddie Knight
+      affiliation: Revanite
+      email: eknight@revanite.io
+      primary: true
+  license:
+    url: https://github.com/ossf/pvtr-github-repo-scanner/blob/main/LICENSE
+    expression: Apache-2.0
+  documentation:
+    contributing-guide: https://github.com/ossf/pvtr-github-repo-scanner/blob/main/.github/CONTRIBUTING.md
+  security:
+    assessments:
+      self:
+        comment: |
+          A formal self-assessment has not yet been completed for this project.
+    # OSPS-BR-07.01: declare the secret-scanning tooling enabled on this repository.
+    tools:
+      - name: GitHub Secret Scanning
+        type: secret-scanning
+        rulesets:
+          - default
+        comment: |
+          GitHub-native secret scanning with push protection, enabled in the
+          repository security settings.
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+      - name: CodeQL
+        type: SAST
+        rulesets:
+          - default
+        comment: |
+          CodeQL static analysis runs in CI via .github/workflows/codeql.yml.
+        integration:
+          adhoc: false
+          ci: true
+          release: false
