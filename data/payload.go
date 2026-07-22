@@ -133,7 +133,19 @@ func getGraphqlRepoData(config *config.Config, client *githubv4.Client, owner, r
 		return client.Query(context.Background(), &data, variables)
 	})
 	if err != nil {
+		// githubv4 decodes every resolvable field into data before returning a
+		// GraphQL errors-array error, so a field-level permission error still leaves
+		// a usable payload: admin/installation-gated fields (branch protection, the
+		// dependency graph) decode to their zero value while public fields resolve.
+		// Repository.Name is non-null in the schema, so a populated name means the
+		// repository node itself resolved and the error is scoped to those gated
+		// fields — treat it as a soft failure and proceed on the partial data.
+		if data != nil && data.Repository.Name != "" {
+			config.Logger.Warn(fmt.Sprintf("GraphQL repo data query returned partial data; some fields were not accessible with the current token (checks that depend on them will see zero values): %s", err.Error()))
+			return data, nil
+		}
 		config.Logger.Error(fmt.Sprintf("Error querying GitHub GraphQL API: %s", err.Error()))
+		return nil, err
 	}
 	return data, err
 }
