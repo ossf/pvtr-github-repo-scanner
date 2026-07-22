@@ -144,6 +144,19 @@ func TestBinaryCheckerIsBinary(t *testing.T) {
 		}
 	})
 
+	t.Run("acceptable binary with stray execute bit not flagged", func(t *testing.T) {
+		for _, path := range []string{"ap-logo.png", "font.woff2", "doc.pdf"} {
+			result, err := bc.check(boolPtr(true), false, path, modeExecutable)
+			if err != nil {
+				t.Errorf("check() error = %v", err)
+				return
+			}
+			if result {
+				t.Errorf("expected acceptable binary %q with execute bit to not be flagged as executable artifact", path)
+			}
+		}
+	})
+
 	t.Run("isBinary false returns false", func(t *testing.T) {
 		result, err := bc.check(boolPtr(false), false, "any-file", modeNonExecutable)
 		if err != nil {
@@ -763,6 +776,16 @@ func TestAcceptableBinaryExtension(t *testing.T) {
 		{name: "woff2 font", path: "font.woff2", expected: true},
 		// Documents — acceptable
 		{name: "pdf document", path: "doc.pdf", expected: true},
+		{name: "docx document", path: "contract-sample.docx", expected: true},
+		{name: "doc document", path: "legacy.doc", expected: true},
+		{name: "pptx document", path: "slides.pptx", expected: true},
+		{name: "xlsx document", path: "budget.xlsx", expected: true},
+		{name: "double dot docx", path: "vFabric..docx", expected: true},
+		// Design source assets — acceptable
+		{name: "ai illustrator", path: "logo.ai", expected: true},
+		{name: "sketch design", path: "nginx-ui-logo-design.sketch", expected: true},
+		{name: "psd photoshop", path: "24pullrequests.psd", expected: true},
+		{name: "graffle diagram", path: "imposter.graffle", expected: true},
 		// Case insensitive
 		{name: "upper PNG", path: "logo.PNG", expected: true},
 	}
@@ -826,6 +849,18 @@ func TestCheckUnreviewable(t *testing.T) {
 		}
 		if result {
 			t.Error("expected binary font to return false (acceptable)")
+		}
+	})
+
+	t.Run("binary design asset not flagged", func(t *testing.T) {
+		for _, path := range []string{"logo.ai", "nginx-ui-logo-design.sketch", "art.psd", "diagram.graffle"} {
+			result, err := bc.checkUnreviewable(boolPtr(true), false, path)
+			if err != nil {
+				t.Errorf("checkUnreviewable() error = %v", err)
+			}
+			if result {
+				t.Errorf("expected binary design asset %q to return false (acceptable)", path)
+			}
 		}
 	})
 

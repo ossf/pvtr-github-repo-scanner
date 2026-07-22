@@ -43,30 +43,26 @@ var (
 			build_release.CicdBranchNameSanitized,
 		},
 		"OSPS-BR-02.01": {
-			reusable_steps.HasMadeReleases,
 			build_release.ReleaseHasUniqueIdentifier,
 		},
 		"OSPS-BR-02.02": {
 			reusable_steps.NotImplemented,
 		},
 		"OSPS-BR-03.01": {
-			reusable_steps.HasSecurityInsightsFile,
 			build_release.EnsureInsightsLinksUseHTTPS,
 		},
 		"OSPS-BR-03.02": {
 			build_release.DistributionPointsUseHTTPS,
 		},
 		"OSPS-BR-04.01": {
-			reusable_steps.HasMadeReleases,
 			build_release.EnsureLatestReleaseHasChangelog,
 		},
 		"OSPS-BR-05.01": {
 			reusable_steps.NotImplemented,
 		},
 		"OSPS-BR-06.01": {
-			reusable_steps.HasMadeReleases,
 			reusable_steps.HasSecurityInsightsFile,
-			build_release.InsightsHasSlsaAttestation,
+			build_release.ReleasesAreSignedOrAttested,
 		},
 		"OSPS-BR-07.01": {
 			build_release.SecretScanningInUse,
@@ -75,22 +71,18 @@ var (
 			reusable_steps.NotImplemented,
 		},
 		"OSPS-DO-01.01": {
-			reusable_steps.HasMadeReleases,
 			reusable_steps.HasSecurityInsightsFile,
 			docs.HasUserGuides,
 		},
 		"OSPS-DO-02.01": {
-			reusable_steps.HasMadeReleases,
 			reusable_steps.HasIssuesOrDiscussionsEnabled,
 			docs.AcceptsVulnReports,
 		},
 		"OSPS-DO-03.01": {
-			reusable_steps.HasMadeReleases,
 			reusable_steps.HasSecurityInsightsFile,
 			docs.HasSignatureVerificationGuide,
 		},
 		"OSPS-DO-03.02": {
-			reusable_steps.HasMadeReleases,
 			reusable_steps.HasSecurityInsightsFile,
 			docs.HasIdentityVerificationGuide,
 		},
@@ -102,12 +94,9 @@ var (
 		},
 		"OSPS-DO-06.01": {
 			reusable_steps.IsCodeRepo,
-			reusable_steps.HasMadeReleases,
-			reusable_steps.HasSecurityInsightsFile,
 			docs.HasDependencyManagementPolicy,
 		},
 		"OSPS-GV-01.01": {
-			reusable_steps.HasSecurityInsightsFile,
 			reusable_steps.IsActive,
 			governance.CoreTeamIsListed,
 			governance.ProjectAdminsListed,
@@ -193,7 +182,6 @@ var (
 			quality.RequiresNonAuthorApproval,
 		},
 		"OSPS-SA-01.01": {
-			reusable_steps.HasMadeReleases,
 			sec_assessment.HasDesignDocumentation,
 		},
 		"OSPS-SA-02.01": {
@@ -207,7 +195,6 @@ var (
 		},
 		"OSPS-VM-01.01": {
 			reusable_steps.IsActive,
-			reusable_steps.HasSecurityInsightsFile,
 			vuln_management.HasVulnerabilityDisclosurePolicy,
 		},
 		"OSPS-VM-02.01": {
@@ -216,7 +203,6 @@ var (
 		},
 		"OSPS-VM-03.01": {
 			reusable_steps.IsActive,
-			reusable_steps.HasSecurityInsightsFile,
 			vuln_management.HasPrivateVulnerabilityReporting,
 		},
 		"OSPS-VM-04.01": {

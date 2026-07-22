@@ -90,5 +90,11 @@ type GraphqlRepoData struct {
 				} `graphql:"releaseAssets(first: 100)"`
 			}
 		} `graphql:"releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC})"`
+
+		// Selected here rather than in its own query: it targets the same
+		// repository node, so it costs nothing extra to fetch alongside.
+		DependencyGraphManifests struct {
+			TotalCount int
+		}
 	} `graphql:"repository(owner: $owner, name: $name)"`
 }
