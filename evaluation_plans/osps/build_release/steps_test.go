@@ -136,50 +136,71 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 // mockSecurityPosture implements data.SecurityPosture so step tests can drive
 // SecretScanningInUse without constructing a real (admin-scoped) API payload.
 type mockSecurityPosture struct {
-	preventsPush bool
-	scans        bool
-	observable   bool
+	preventsPush     bool
+	scans            bool
+	observable       bool
+	insightsDeclares bool
 }
 
 func (m mockSecurityPosture) PreventsPushingSecrets() bool          { return m.preventsPush }
 func (m mockSecurityPosture) ScansForSecrets() bool                 { return m.scans }
 func (m mockSecurityPosture) DefinesPolicyForHandlingSecrets() bool { return false }
 func (m mockSecurityPosture) SecretScanningObservable() bool        { return m.observable }
+func (m mockSecurityPosture) InsightsDeclaresSecretScanning() bool  { return m.insightsDeclares }
 
 func TestSecretScanningInUse(t *testing.T) {
 	testCases := []struct {
-		name           string
-		posture        mockSecurityPosture
-		expectedResult gemara.Result
+		name            string
+		posture         mockSecurityPosture
+		expectedResult  gemara.Result
+		expectedMessage string
 	}{
 		{
-			name:           "fully enabled passes",
-			posture:        mockSecurityPosture{preventsPush: true, scans: true, observable: true},
-			expectedResult: gemara.Passed,
+			name:            "GitHub reports both enabled passes",
+			posture:         mockSecurityPosture{preventsPush: true, scans: true, observable: true},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "GitHub secret scanning and push protection are both enabled",
 		},
 		{
-			name:           "partially enabled fails",
-			posture:        mockSecurityPosture{scans: true, observable: true},
-			expectedResult: gemara.Failed,
+			// Native settings off/unreadable, but the project self-declares tooling.
+			name:            "Security Insights declaration passes",
+			posture:         mockSecurityPosture{insightsDeclares: true},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Security Insights declares secret-scanning tooling",
 		},
 		{
-			name:           "observably disabled fails",
-			posture:        mockSecurityPosture{observable: true},
-			expectedResult: gemara.Failed,
+			name:            "scanning without push protection fails and names the gap",
+			posture:         mockSecurityPosture{scans: true, observable: true},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "GitHub secret scanning is enabled, but push protection is not",
+		},
+		{
+			name:            "push protection without scanning fails and names the gap",
+			posture:         mockSecurityPosture{preventsPush: true, observable: true},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "GitHub push protection is enabled, but secret scanning is not",
+		},
+		{
+			name:            "observably disabled fails",
+			posture:         mockSecurityPosture{observable: true},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "GitHub reports secret scanning and push protection are both disabled",
 		},
 		{
 			// The 14k-repo case: no admin access to read security_and_analysis and
 			// no Security Insights claim, so the status is unknown, not off.
-			name:           "unobservable needs review",
-			posture:        mockSecurityPosture{observable: false},
-			expectedResult: gemara.NeedsReview,
+			name:            "unobservable with no declaration needs review",
+			posture:         mockSecurityPosture{observable: false},
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: "not observable",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, _, _ := SecretScanningInUse(data.Payload{SecurityPosture: tc.posture})
+			result, message, _ := SecretScanningInUse(data.Payload{SecurityPosture: tc.posture})
 			assert.Equal(t, tc.expectedResult, result)
+			assert.Contains(t, message, tc.expectedMessage)
 		})
 	}
 }
