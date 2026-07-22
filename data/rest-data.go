@@ -41,8 +41,18 @@ type RestData struct {
 	SecurityPolicy              SecurityPolicy
 	Releases                    []ReleaseData
 	contents                    RepoContent
+	Readme                      *ReadmeData
 	ghClient                    *github.Client `json:"-" yaml:"-"`
 	HttpClient                  HttpClient     `json:"-" yaml:"-"`
+}
+
+// ReadmeData caches the repository's README lookup: whether one was found in the
+// root or .github directory and, when so, its decoded contents. It is populated
+// lazily by ReadmeContent so a scan pays for the content fetch only when a step
+// actually needs the README body (e.g. AI-assisted OSPS-DO-01).
+type ReadmeData struct {
+	Found   bool
+	Content string
 }
 
 type RepoContent struct {
@@ -224,6 +234,32 @@ func (r *RestData) HasSupportMarkdown() bool {
 		}
 	}
 	return false
+}
+
+// ReadmeContent lazily fetches the repository's README and returns its decoded
+// content along with whether a README file exists. The result is cached on
+// RestData (shared across steps, which receive the Payload by value but a shared
+// *RestData), so the content is fetched at most once per scan and only when a
+// caller asks for it. Presence is reported even when the body cannot be decoded.
+func (r *RestData) ReadmeContent() (content string, found bool) {
+	if r.Readme != nil {
+		return r.Readme.Content, r.Readme.Found
+	}
+
+	loaded := &ReadmeData{}
+	path := r.checkFile("readme.md")
+	if path != "" {
+		loaded.Found = true
+		if file, err := r.getSourceFile(r.owner, r.repo, path); err != nil {
+			r.Config.Logger.Error(fmt.Sprintf("failed to retrieve README content: %s", err.Error()))
+		} else if decoded, err := file.GetContent(); err != nil {
+			r.Config.Logger.Error(fmt.Sprintf("failed to decode README content: %s", err.Error()))
+		} else {
+			loaded.Content = decoded
+		}
+	}
+	r.Readme = loaded
+	return loaded.Content, loaded.Found
 }
 
 func parseMarkdownHeadings(content []byte) []string {

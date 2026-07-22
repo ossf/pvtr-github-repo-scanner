@@ -5,12 +5,53 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gemaraproj/go-gemara"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/shurcooL/githubv4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestPayloadEvidenceCollectorSharedAcrossValueCopies pins down the reason the
+// collector is embedded by pointer: steps receive the Payload by value, and
+// go-gemara harvests evidence via a HasEvidence assertion on that copy. A value
+// copy must still satisfy the interface, and evidence it records must land in
+// the one collector the original also reads.
+func TestPayloadEvidenceCollectorSharedAcrossValueCopies(t *testing.T) {
+	original := Payload{EvidenceCollector: &gemara.EvidenceCollector{}}
+
+	cp := original
+	harvestable, ok := any(cp).(gemara.HasEvidence)
+	require.True(t, ok, "a value copy of Payload must satisfy gemara.HasEvidence")
+
+	harvestable.AddEvidence(gemara.Evidence{Description: "recorded via a copy"})
+
+	shared := original.GetEvidence()
+	require.Len(t, shared, 1, "evidence added through a copy must be visible via the original")
+	assert.Equal(t, "recorded via a copy", shared[0].Description)
+}
+
+// TestNewAIClient covers the two non-error dispositions of the optional
+// AI-assist client. Loader itself makes network calls, so client construction is
+// factored into newAIClient and exercised directly here.
+func TestNewAIClient(t *testing.T) {
+	t.Run("unconfigured AI yields a nil client", func(t *testing.T) {
+		cfg := &config.Config{Logger: hclog.NewNullLogger()}
+		assert.Nil(t, newAIClient(cfg))
+	})
+
+	t.Run("explicitly configured but invalid AI degrades to a nil client", func(t *testing.T) {
+		// A provider is set (so AI is intentionally on) but model/api-key are
+		// missing: an optional accelerator must not abort the scan, so this
+		// logs a warning and returns nil rather than failing.
+		cfg := &config.Config{
+			Logger: hclog.NewNullLogger(),
+			Vars:   map[string]interface{}{"ai_provider": "openai"},
+		}
+		assert.Nil(t, newAIClient(cfg))
+	})
+}
 
 // payloadWithCache builds the minimum Payload the cached accessors require.
 // client is deliberately nil: these tests assert that a populated cache is
