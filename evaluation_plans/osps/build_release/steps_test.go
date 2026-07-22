@@ -39,6 +39,9 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 		name           string
 		payload        data.Payload
 		expectedResult gemara.Result
+		// expectedMsgContains, when set, asserts the exit message names the
+		// specific artifact kind that was found.
+		expectedMsgContains string
 	}{
 		{
 			name:           "no releases is not applicable",
@@ -56,31 +59,37 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 			expectedResult: gemara.Passed,
 		},
 		{
-			name:           "GPG signature asset passes",
-			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.asc"),
-			expectedResult: gemara.Passed,
+			name:                "GPG signature asset passes",
+			payload:             releasePayload("", "app.tar.gz", "app.tar.gz.asc"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "a cryptographic signature",
 		},
 		{
-			name:           "cosign signature asset passes",
-			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.sig"),
-			expectedResult: gemara.Passed,
+			name:                "cosign signature asset passes",
+			payload:             releasePayload("", "app.tar.gz", "app.tar.gz.sig"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "a cryptographic signature",
 		},
 		{
-			name:           "sigstore bundle asset passes",
-			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.sigstore"),
-			expectedResult: gemara.Passed,
+			name:                "sigstore bundle asset passes",
+			payload:             releasePayload("", "app.tar.gz", "app.tar.gz.sigstore"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "a Sigstore bundle",
 		},
 		{
 			// Real cosign/goreleaser naming: modern sigstore bundles end in
-			// ".sigstore.json", so a plain ".sigstore" suffix match is not enough.
-			name:           "modern .sigstore.json bundle passes",
-			payload:        releasePayload("", "cosign-linux-amd64", "cosign-linux-amd64.sigstore.json"),
-			expectedResult: gemara.Passed,
+			// ".sigstore.json", which is matched as its own suffix (a plain
+			// ".sigstore" suffix would miss the trailing ".json").
+			name:                "modern .sigstore.json bundle passes",
+			payload:             releasePayload("", "cosign-linux-amd64", "cosign-linux-amd64.sigstore.json"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "a Sigstore bundle",
 		},
 		{
-			name:           "SLSA in-toto provenance asset passes",
-			payload:        releasePayload("", "app.tar.gz", "multiple.intoto.jsonl"),
-			expectedResult: gemara.Passed,
+			name:                "SLSA in-toto provenance asset passes",
+			payload:             releasePayload("", "app.tar.gz", "multiple.intoto.jsonl"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "an in-toto/SLSA provenance attestation",
 		},
 		{
 			name:           "checksum manifest alone needs review",
@@ -115,8 +124,11 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, _, _ := ReleasesAreSignedOrAttested(tc.payload)
+			result, message, _ := ReleasesAreSignedOrAttested(tc.payload)
 			assert.Equal(t, tc.expectedResult, result)
+			if tc.expectedMsgContains != "" {
+				assert.Contains(t, message, tc.expectedMsgContains)
+			}
 		})
 	}
 }
