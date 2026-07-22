@@ -5,11 +5,121 @@ import (
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
+	"github.com/ossf/si-tooling/v2/si"
 	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
+
+// releasePayload builds a Payload whose single release publishes the named
+// assets, plus an optional self-declared Security Insights attestation predicate.
+func releasePayload(attestationPredicate string, assetNames ...string) data.Payload {
+	assets := make([]data.ReleaseAsset, 0, len(assetNames))
+	for _, name := range assetNames {
+		assets = append(assets, data.ReleaseAsset{Name: name})
+	}
+	// Mirror a post-Setup payload: ensureInsightsInitialized guarantees these SI
+	// structs are non-nil before any step runs.
+	releaseDetails := &si.ReleaseDetails{}
+	if attestationPredicate != "" {
+		releaseDetails.Attestations = []si.Attestation{{PredicateURI: attestationPredicate}}
+	}
+	rest := &data.RestData{
+		Releases: []data.ReleaseData{{TagName: "v1.0.0", Assets: assets}},
+		Insights: si.SecurityInsights{
+			Repository: &si.Repository{ReleaseDetails: releaseDetails},
+		},
+	}
+	return data.Payload{RestData: rest}
+}
+
+func TestReleasesAreSignedOrAttested(t *testing.T) {
+	testCases := []struct {
+		name           string
+		payload        data.Payload
+		expectedResult gemara.Result
+	}{
+		{
+			name:           "no releases is not applicable",
+			payload:        data.Payload{RestData: &data.RestData{}},
+			expectedResult: gemara.NotApplicable,
+		},
+		{
+			name:           "self-declared SLSA provenance passes",
+			payload:        releasePayload("https://slsa.dev/provenance/v1", "app.tar.gz"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "self-declared SLSA VSA passes",
+			payload:        releasePayload("https://slsa.dev/verification_summary/v1", "app.tar.gz"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "GPG signature asset passes",
+			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.asc"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "cosign signature asset passes",
+			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.sig"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "sigstore bundle asset passes",
+			payload:        releasePayload("", "app.tar.gz", "app.tar.gz.sigstore"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			// Real cosign/goreleaser naming: modern sigstore bundles end in
+			// ".sigstore.json", so a plain ".sigstore" suffix match is not enough.
+			name:           "modern .sigstore.json bundle passes",
+			payload:        releasePayload("", "cosign-linux-amd64", "cosign-linux-amd64.sigstore.json"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "SLSA in-toto provenance asset passes",
+			payload:        releasePayload("", "app.tar.gz", "multiple.intoto.jsonl"),
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "checksum manifest alone needs review",
+			payload:        releasePayload("", "app.tar.gz", "checksums.txt"),
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			// Real gh-cli naming: the manifest is prefixed with project/version,
+			// so checksum detection must be substring-based, not exact-match.
+			name:           "project-prefixed checksum manifest needs review",
+			payload:        releasePayload("", "gh_2.96.0_linux_amd64.tar.gz", "gh_2.96.0_checksums.txt"),
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			// Real kubernetes/kubernetes: a release whose binaries live outside
+			// GitHub. No attached assets means nothing observable, not a failure.
+			name:           "release with no attached assets needs review",
+			payload:        data.Payload{RestData: &data.RestData{Releases: []data.ReleaseData{{TagName: "v1.0.0"}}, Insights: si.SecurityInsights{Repository: &si.Repository{ReleaseDetails: &si.ReleaseDetails{}}}}},
+			expectedResult: gemara.NeedsReview,
+		},
+		{
+			name:           "unsigned assets fail",
+			payload:        releasePayload("", "app.tar.gz", "app.zip"),
+			expectedResult: gemara.Failed,
+		},
+		{
+			name:           "unrelated SI attestation predicate falls through to asset checks",
+			payload:        releasePayload("https://in-toto.io/attestation/vulns/v0.1", "app.zip"),
+			expectedResult: gemara.Failed,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _, _ := ReleasesAreSignedOrAttested(tc.payload)
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
+}
 
 var goodWorkflowFile = `name: OSPS Baseline Scan
 

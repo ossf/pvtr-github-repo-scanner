@@ -467,15 +467,116 @@ func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result
 	return gemara.NeedsReview, "The latest release description has no recognized changelog markers; manual review required", gemara.Low
 }
 
-func InsightsHasSlsaAttestation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	attestations := payload.Insights.Repository.ReleaseDetails.Attestations
+// signatureAssetSuffixes are release-asset name endings that directly evidence a
+// cryptographic signature or in-toto/SLSA attestation published alongside the
+// release. This mirrors the artifacts Scorecard's Signed-Releases check counts
+// (BR-06 maps to that check), plus the in-toto provenance bundles produced by
+// slsa-github-generator, cosign, and `gh attestation`.
+var signatureAssetSuffixes = []string{
+	".sig", ".asc", ".sign", ".minisig", ".gpg", ".pgp",
+	".sigstore", ".bundle", ".intoto.jsonl",
+}
 
-	for _, attestation := range attestations {
-		if attestation.PredicateURI == "https://slsa.dev/provenance/v1" {
-			return gemara.Passed, "Found SLSA attestation in security insights", confidence
+// signatureAssetSubstrings catch signature/provenance/attestation bundles whose
+// names do not end in a fixed suffix — e.g. "multiple.intoto.jsonl", or the
+// modern sigstore bundle "cosign-linux-amd64.sigstore.json" (note the trailing
+// ".json", which is why a plain ".sigstore" suffix is not enough).
+var signatureAssetSubstrings = []string{"intoto", "provenance", "attestation", "sigstore"}
+
+// hashManifestSuffixes and hashManifestMarkers indicate a checksum manifest: the
+// release accounts for each asset's hash, but a manifest on its own does not
+// prove it is signed. Markers are matched as substrings because release tooling
+// commonly prefixes the project and version (e.g. "gh_2.96.0_checksums.txt").
+var (
+	hashManifestSuffixes = []string{".sha256", ".sha512", ".sha1", ".sha256sum", ".sha512sum", ".md5"}
+	hashManifestMarkers  = []string{"checksums", "sha256sums", "sha512sums"}
+)
+
+func hasSignatureAsset(lowerName string) bool {
+	for _, suffix := range signatureAssetSuffixes {
+		if strings.HasSuffix(lowerName, suffix) {
+			return true
 		}
 	}
-	return gemara.Failed, "No SLSA attestation found in security insights", confidence
+	for _, sub := range signatureAssetSubstrings {
+		if strings.Contains(lowerName, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHashManifest(lowerName string) bool {
+	for _, suffix := range hashManifestSuffixes {
+		if strings.HasSuffix(lowerName, suffix) {
+			return true
+		}
+	}
+	for _, marker := range hashManifestMarkers {
+		if strings.Contains(lowerName, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReleasesAreSignedOrAttested evaluates OSPS-BR-06.01: released assets must be
+// signed or accounted for in a signed manifest. Evidence is accepted from either
+// a self-declared SLSA attestation in Security Insights or, more commonly, the
+// signature/attestation assets actually published with the release. A checksum
+// manifest with no observable signature is flagged for review rather than passed.
+//
+// Note: GitHub's native artifact attestations (stored via the attestations API
+// rather than attached to a release) are not visible here; a project that signs
+// only that way and declares nothing in Security Insights will land in review.
+func ReleasesAreSignedOrAttested(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// The control only applies once an official release exists — there is
+	// nothing to sign otherwise. HasMadeReleases already reports this, but the
+	// assessment chain does not halt on NotApplicable, so guard here too rather
+	// than fail a repo that has published nothing.
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; release-signing requirement does not apply", gemara.High
+	}
+
+	// 1. The project self-declares a SLSA provenance/VSA attestation in its
+	//    Security Insights file.
+	for _, attestation := range payload.Insights.Repository.ReleaseDetails.Attestations {
+		if strings.Contains(strings.ToLower(attestation.PredicateURI), "slsa.dev") {
+			return gemara.Passed, "SLSA attestation declared in Security Insights", gemara.High
+		}
+	}
+
+	// 2. Observe the published release assets for signatures or attestations.
+	sawHashManifest := false
+	totalAssets := 0
+	for _, release := range payload.Releases {
+		for _, asset := range release.Assets {
+			totalAssets++
+			name := strings.ToLower(asset.Name)
+			if hasSignatureAsset(name) {
+				return gemara.Passed, fmt.Sprintf("Release %q publishes a signature or attestation asset (%s)", release.TagName, asset.Name), gemara.Medium
+			}
+			if isHashManifest(name) {
+				sawHashManifest = true
+			}
+		}
+	}
+
+	// 3. A checksum manifest accounts for each asset's hash but does not, on its
+	//    own, prove the manifest is signed — flag for manual review.
+	if sawHashManifest {
+		return gemara.NeedsReview, "Release publishes a checksum manifest but no signature or attestation was observed; verify the manifest is signed", gemara.Low
+	}
+
+	// 4. No attached assets to inspect. Projects that distribute binaries outside
+	//    GitHub releases (e.g. a package registry or object store) sign them where
+	//    they live, which this asset-name scan cannot see — so this is unknown, not
+	//    a failure.
+	if totalAssets == 0 {
+		return gemara.NeedsReview, "Releases exist but publish no attached assets to inspect for signatures; distribution and signing may occur outside GitHub releases", gemara.Low
+	}
+
+	return gemara.Failed, "No release signature, attestation, or signed manifest found in Security Insights or release assets", gemara.Medium
 }
 
 func DistributionPointsUseHTTPS(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
