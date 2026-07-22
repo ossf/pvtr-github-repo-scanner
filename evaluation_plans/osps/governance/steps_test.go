@@ -123,6 +123,62 @@ func TestHasContributionGuide(t *testing.T) {
 	}
 }
 
+func TestHasContributionReviewPolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		build           func() data.Payload
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name: "not a code repository is not applicable",
+			build: func() data.Payload {
+				return data.NewPayloadWithHTTPMock(data.Payload{GraphqlRepoData: &data.GraphqlRepoData{}}, nil, 200, nil)
+			},
+			expectedResult:  gemara.NotApplicable,
+			expectedMessage: "Repository contains no code - skipping code contribution policy check",
+		},
+		{
+			name: "Security Insights declares a review policy",
+			build: func() data.Payload {
+				p := data.NewPayloadWithHTTPMock(data.Payload{GraphqlRepoData: &data.GraphqlRepoData{}, IsCodeRepo: true}, nil, 200, nil)
+				p.Insights.Repository.Documentation.ReviewPolicy = stubURL("https://example.com/REVIEW.md")
+				return p
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "Code review guide was specified in Security Insights data",
+		},
+		{
+			name: "observed contribution guide with no declared policy needs review",
+			build: func() data.Payload {
+				repo := &data.GraphqlRepoData{}
+				repo.Repository.Object.Tree.Entries = append(repo.Repository.Object.Tree.Entries,
+					treeEntry("CONTRIBUTING.md", "blob", "CONTRIBUTING.md"),
+				)
+				return data.NewPayloadWithHTTPMock(data.Payload{GraphqlRepoData: repo, IsCodeRepo: true}, nil, 200, nil)
+			},
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: "Contribution guide found via GitHub API (repository file CONTRIBUTING.md), but Security Insights does not declare its requirements for acceptable contributions; manual review required to confirm the guide covers them",
+		},
+		{
+			name: "no guide and no policy fails",
+			build: func() data.Payload {
+				return data.NewPayloadWithHTTPMock(data.Payload{GraphqlRepoData: &data.GraphqlRepoData{}, IsCodeRepo: true}, nil, 200, nil)
+			},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "No contributor guide documenting requirements for acceptable contributions found in Security Insights data or repository files",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, message, _ := HasContributionReviewPolicy(test.build())
+			assert.Equal(t, test.expectedResult, result)
+			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
 func file(name, path string) *github.RepositoryContent {
 	return &github.RepositoryContent{
 		Type: github.Ptr("file"),

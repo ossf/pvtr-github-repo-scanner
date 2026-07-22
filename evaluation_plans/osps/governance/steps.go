@@ -134,5 +134,15 @@ func HasContributionReviewPolicy(payload data.Payload) (result gemara.Result, me
 		return gemara.Passed, "Code review guide was specified in Security Insights data", confidence
 	}
 
-	return gemara.Failed, "Code review guide was NOT specified in Security Insights data", confidence
+	// GV-03.02 wants a contributor guide that documents the requirements for
+	// acceptable contributions, which the OSPS recommendation places in
+	// CONTRIBUTING.md. When Security Insights does not declare it but a
+	// contribution guide is observed, that guide may well cover those
+	// requirements — we just cannot confirm the content automatically, so flag it
+	// for review rather than failing a repo that most likely documents this.
+	if evidence := contributionGuideEvidence(payload); evidence != "" {
+		return gemara.NeedsReview, "Contribution guide found via " + evidence + ", but Security Insights does not declare its requirements for acceptable contributions; manual review required to confirm the guide covers them", gemara.Low
+	}
+
+	return gemara.Failed, "No contributor guide documenting requirements for acceptable contributions found in Security Insights data or repository files", gemara.Medium
 }
