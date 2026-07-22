@@ -195,7 +195,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 				},
 			},
 			wantResult:  gemara.Failed,
-			wantMessage: "Default branch is not protected",
+			wantMessage: "Found Ruleset, but not protection of the default branch",
 		},
 		{
 			name: "unobservable: rulesets visible and empty but non-admin token",

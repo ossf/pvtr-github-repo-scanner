@@ -41,8 +41,8 @@ func BranchProtectionRestrictsPushes(payload data.Payload) (result gemara.Result
 		confidence = gemara.High
 	case metadata.RulesetsObserved() && metadata.ViewerCanAdminister():
 		result = gemara.Failed
-		message = "Default branch is not protected"
-		confidence = gemara.High
+		message = "Found Ruleset, but not protection of the default branch"
+		confidence = gemara.Medium
 	default:
 		result = gemara.NeedsReview
 		message = unobservableProtectionMessage
