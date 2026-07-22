@@ -106,6 +106,10 @@ var (
 			reusable_steps.HasSecurityInsightsFile,
 			docs.HasDependencyManagementPolicy,
 		},
+		"OSPS-DO-07.01": {
+			reusable_steps.IsCodeRepo,
+			docs.HasBuildInstructions,
+		},
 		"OSPS-GV-01.01": {
 			reusable_steps.HasSecurityInsightsFile,
 			reusable_steps.IsActive,

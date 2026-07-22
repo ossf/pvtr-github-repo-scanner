@@ -1,11 +1,14 @@
 package data
 
 import (
+	"encoding/base64"
 	"net/http"
 	"testing"
 
 	"github.com/google/go-github/v74/github"
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/migueleliasweb/go-github-mock/src/mock"
+	"github.com/privateerproj/privateer-sdk/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -126,6 +129,168 @@ func TestGetSubdirContentByPath(t *testing.T) {
 		assert.Contains(t, err.Error(), "no subdirectories found")
 	})
 }
+
+func TestHasBuildInstructionHeading(t *testing.T) {
+	tests := []struct {
+		name     string
+		headings []string
+		expected bool
+	}{
+		{name: "no headings", headings: nil, expected: false},
+		{name: "unrelated headings", headings: []string{"Usage", "License", "Support"}, expected: false},
+		{name: "exact Build heading", headings: []string{"Build"}, expected: true},
+		{name: "case insensitive", headings: []string{"BUILDING"}, expected: true},
+		{name: "phrase with surrounding text", headings: []string{"Building from source"}, expected: true},
+		{name: "getting started", headings: []string{"Getting Started"}, expected: true},
+		{name: "compile section", headings: []string{"How to Compile the Project"}, expected: true},
+		{name: "development setup", headings: []string{"Development Setup"}, expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, hasBuildInstructionHeading(tt.headings))
+		})
+	}
+}
+
+func TestHasBuildInstructions(t *testing.T) {
+	dummyGithubDir := []*github.RepositoryContent{
+		{Type: github.Ptr("file"), Name: github.Ptr("PULL_REQUEST_TEMPLATE.md"), Path: github.Ptr(".github/PULL_REQUEST_TEMPLATE.md")},
+	}
+
+	tests := []struct {
+		name        string
+		toplevel    []*github.RepositoryContent
+		githubDir   []*github.RepositoryContent
+		fileContent string                   // markdown returned for README/CONTRIBUTING lookups
+		responses   []mock.MockBackendOption // overrides the content response when set (e.g. to simulate failures)
+		expected    bool
+	}{
+		{
+			name: "Makefile in root",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("Makefile"), Path: github.Ptr("Makefile")},
+			},
+			githubDir: dummyGithubDir,
+			expected:  true,
+		},
+		{
+			name: "BUILDING.md in root",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("BUILDING.md"), Path: github.Ptr("BUILDING.md")},
+			},
+			githubDir: dummyGithubDir,
+			expected:  true,
+		},
+		{
+			name:     "Makefile in .github",
+			toplevel: []*github.RepositoryContent{},
+			githubDir: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("makefile"), Path: github.Ptr(".github/makefile")},
+			},
+			expected: true,
+		},
+		{
+			name: "README with build heading",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("readme.md"), Path: github.Ptr("readme.md")},
+			},
+			githubDir:   dummyGithubDir,
+			fileContent: "# My Project\n\n## Building from Source\n\nRun `make build`.\n",
+			expected:    true,
+		},
+		{
+			name: "CONTRIBUTING with build heading",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("CONTRIBUTING.md"), Path: github.Ptr("CONTRIBUTING.md")},
+			},
+			githubDir:   dummyGithubDir,
+			fileContent: "# Contributing\n\n## Development Setup\n\nInstall the SDK first.\n",
+			expected:    true,
+		},
+		{
+			name: "README without build heading",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("readme.md"), Path: github.Ptr("readme.md")},
+			},
+			githubDir:   dummyGithubDir,
+			fileContent: "# My Project\n\n## Usage\n\nJust run it.\n",
+			expected:    false,
+		},
+		{
+			name:      "no build documentation",
+			toplevel:  []*github.RepositoryContent{},
+			githubDir: dummyGithubDir,
+			expected:  false,
+		},
+		{
+			name: "README fetch fails",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("readme.md"), Path: github.Ptr("readme.md")},
+			},
+			githubDir: dummyGithubDir,
+			responses: []mock.MockBackendOption{
+				mock.WithRequestMatchHandler(
+					mock.GetReposContentsByOwnerByRepoByPath,
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						mock.WriteError(w, http.StatusInternalServerError, "github went belly up")
+					}),
+				),
+			},
+			expected: false,
+		},
+		{
+			name: "README content cannot be decoded",
+			toplevel: []*github.RepositoryContent{
+				{Type: github.Ptr("file"), Name: github.Ptr("readme.md"), Path: github.Ptr("readme.md")},
+			},
+			githubDir: dummyGithubDir,
+			responses: []mock.MockBackendOption{
+				mock.WithRequestMatch(
+					mock.GetReposContentsByOwnerByRepoByPath,
+					github.RepositoryContent{
+						Type:     github.Ptr("file"),
+						Encoding: github.Ptr("unsupported-encoding"),
+						Content:  github.Ptr("## Building"),
+					},
+				),
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			responses := tt.responses
+			if responses == nil && tt.fileContent != "" {
+				responses = append(responses, mock.WithRequestMatch(
+					mock.GetReposContentsByOwnerByRepoByPath,
+					github.RepositoryContent{
+						Type:     github.Ptr("file"),
+						Encoding: github.Ptr("base64"),
+						Content:  github.Ptr(base64.StdEncoding.EncodeToString([]byte(tt.fileContent))),
+					},
+				))
+			}
+			mockClient := mock.NewMockedHTTPClient(responses...)
+			ghClient := github.NewClient(mockClient)
+			rest := &RestData{
+				ghClient: ghClient,
+				owner:    "test-owner",
+				repo:     "test-repo",
+				Config:   &config.Config{Logger: hclog.NewNullLogger()},
+				contents: RepoContent{
+					Content: tt.toplevel,
+					SubContent: map[string]RepoContent{
+						".github": {Content: tt.githubDir},
+					},
+				},
+			}
+			assert.Equal(t, tt.expected, rest.HasBuildInstructions())
+		})
+	}
+}
+
 func TestIsCodeRepo(t *testing.T) {
 	tests := []struct {
 		name           string

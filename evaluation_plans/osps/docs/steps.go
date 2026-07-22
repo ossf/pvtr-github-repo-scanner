@@ -53,3 +53,11 @@ func HasIdentityVerificationGuide(payload data.Payload) (result gemara.Result, m
 
 	return gemara.Passed, "Identity verification guide was specified in Security Insights data (found in signature-verification field)", confidence
 }
+
+func HasBuildInstructions(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if payload.HasBuildInstructions() {
+		return gemara.Passed, "Build-from-source instructions were found (build automation file or a build section in the README or CONTRIBUTING guide)", confidence
+	}
+
+	return gemara.Failed, "Build-from-source instructions were NOT found (checked for a Makefile, build docs, and build sections in the README or CONTRIBUTING guide)", confidence
+}
