@@ -133,6 +133,57 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 	}
 }
 
+// mockSecurityPosture implements data.SecurityPosture so step tests can drive
+// SecretScanningInUse without constructing a real (admin-scoped) API payload.
+type mockSecurityPosture struct {
+	preventsPush bool
+	scans        bool
+	observable   bool
+}
+
+func (m mockSecurityPosture) PreventsPushingSecrets() bool          { return m.preventsPush }
+func (m mockSecurityPosture) ScansForSecrets() bool                 { return m.scans }
+func (m mockSecurityPosture) DefinesPolicyForHandlingSecrets() bool { return false }
+func (m mockSecurityPosture) SecretScanningObservable() bool        { return m.observable }
+
+func TestSecretScanningInUse(t *testing.T) {
+	testCases := []struct {
+		name           string
+		posture        mockSecurityPosture
+		expectedResult gemara.Result
+	}{
+		{
+			name:           "fully enabled passes",
+			posture:        mockSecurityPosture{preventsPush: true, scans: true, observable: true},
+			expectedResult: gemara.Passed,
+		},
+		{
+			name:           "partially enabled fails",
+			posture:        mockSecurityPosture{scans: true, observable: true},
+			expectedResult: gemara.Failed,
+		},
+		{
+			name:           "observably disabled fails",
+			posture:        mockSecurityPosture{observable: true},
+			expectedResult: gemara.Failed,
+		},
+		{
+			// The 14k-repo case: no admin access to read security_and_analysis and
+			// no Security Insights claim, so the status is unknown, not off.
+			name:           "unobservable needs review",
+			posture:        mockSecurityPosture{observable: false},
+			expectedResult: gemara.NeedsReview,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _, _ := SecretScanningInUse(data.Payload{SecurityPosture: tc.posture})
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
+}
+
 var goodWorkflowFile = `name: OSPS Baseline Scan
 
 on: [workflow_dispatch]

@@ -29,6 +29,9 @@ func TestBuildSecurityPosture_NoSecurityConfig(t *testing.T) {
 	assert.False(t, sp.PreventsPushingSecrets())
 	assert.False(t, sp.ScansForSecrets())
 	assert.False(t, sp.DefinesPolicyForHandlingSecrets())
+	// No security_and_analysis block (e.g. a repo we lack admin access to) and no
+	// Security Insights claim: the status is unobservable, not disabled.
+	assert.False(t, sp.SecretScanningObservable())
 }
 
 func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
@@ -51,6 +54,7 @@ func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, sp.PreventsPushingSecrets())
 	assert.True(t, sp.ScansForSecrets())
+	assert.True(t, sp.SecretScanningObservable())
 }
 
 func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *testing.T) {
@@ -70,6 +74,8 @@ func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *te
 	assert.NoError(t, err)
 	assert.True(t, sp.PreventsPushingSecrets())
 	assert.True(t, sp.ScansForSecrets())
+	// A Security Insights declaration is itself positive, observable evidence.
+	assert.True(t, sp.SecretScanningObservable())
 }
 
 func TestBuildSecurityPosture_ScanningEnabledPushProtectionDisabled(t *testing.T) {

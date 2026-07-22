@@ -624,11 +624,20 @@ func DistributionPointsUseHTTPS(payload data.Payload) (result gemara.Result, mes
 }
 
 func SecretScanningInUse(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if payload.SecurityPosture.PreventsPushingSecrets() && payload.SecurityPosture.ScansForSecrets() {
+	sp := payload.SecurityPosture
+	if sp.PreventsPushingSecrets() && sp.ScansForSecrets() {
 		return gemara.Passed, "Secret scanning is enabled and prevents pushing secrets", confidence
-	} else if payload.SecurityPosture.PreventsPushingSecrets() || payload.SecurityPosture.ScansForSecrets() {
-		return gemara.Failed, "Secret scanning is only partially enabled", confidence
-	} else {
-		return gemara.Failed, "Secret scanning is not enabled", confidence
 	}
+
+	// Unobservable is not disabled: lacking the admin access needed to read the
+	// setting (and any Security Insights claim), send it to review rather than
+	// fail on data we never saw. See SecretScanningObservable.
+	if !sp.SecretScanningObservable() {
+		return gemara.NeedsReview, "Secret scanning status is not observable with the current token; reading it requires repository admin access, and no Security Insights declaration was found", gemara.Low
+	}
+
+	if sp.PreventsPushingSecrets() || sp.ScansForSecrets() {
+		return gemara.Failed, "Secret scanning is only partially enabled", confidence
+	}
+	return gemara.Failed, "Secret scanning is not enabled", confidence
 }
