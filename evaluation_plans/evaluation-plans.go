@@ -154,8 +154,9 @@ var (
 		},
 		"OSPS-QA-04.01": {
 			reusable_steps.IsCodeRepo,
-			reusable_steps.HasSecurityInsightsFile,
 			reusable_steps.IsActive,
+			// InsightsListsRepositories reports SI absence as NeedsReview itself,
+			// so the HasSecurityInsightsFile guard would only mask a Pass.
 			quality.InsightsListsRepositories,
 		},
 		"OSPS-QA-04.02": {

@@ -16,6 +16,14 @@ func RepoIsPublic(payload data.Payload) (result gemara.Result, message string, c
 }
 
 func InsightsListsRepositories(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// A project's full repository set is only knowable from a project-level
+	// declaration like Security Insights; GitHub cannot tell us a multi-repo
+	// project's intended set. So an absent or unparseable SI file is unknown, not
+	// a violation — return NeedsReview rather than a false Failed.
+	if payload.InsightsError || payload.Insights.Header.URL == "" {
+		return gemara.NeedsReview, "Cannot enumerate the project's repositories without a Security Insights declaration", confidence
+	}
+
 	if len(payload.Insights.Project.Repositories) > 0 {
 		return gemara.Passed, "Insights contains a list of repositories", confidence
 	}
@@ -23,8 +31,11 @@ func InsightsListsRepositories(payload data.Payload) (result gemara.Result, mess
 	return gemara.Failed, "Insights does not contain a list of repositories", confidence
 }
 
-func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// get the name of all status checks that were run
+// observedStatusChecks returns the names of the check runs seen on the latest
+// default-branch commit. This is a weak sample: it only reflects checks attached
+// to the most recent pull request, so a repo whose latest default-branch commit
+// did not come from a PR shows zero checks even when CI is configured.
+func observedStatusChecks(payload data.Payload) []string {
 	var statusChecks []string
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
@@ -33,52 +44,14 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 			}
 		}
 	}
-
-	// Branch rulesets are fetched once during payload load.
-	if !payload.RepositoryMetadata.HasBranchRules() {
-		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
-	}
-
-	// get the name of all required status checks
-	requiredChecks := payload.RepositoryMetadata.RequiredStatusCheckContexts()
-
-	// check whether all executed checks are required
-	missingChecks := []string{}
-	for _, check := range statusChecks {
-		found := false
-		for _, requiredCheck := range requiredChecks {
-			if check == requiredCheck {
-				found = true
-				break
-			}
-		}
-		if !found {
-			missingChecks = append(missingChecks, check)
-		}
-	}
-
-	if len(missingChecks) > 0 {
-		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)", strings.Join(missingChecks, ", ")), confidence
-	}
-
-	return gemara.Passed, "No status checks were run that are not required by the rules", confidence
+	return statusChecks
 }
 
-func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// get the name of all status checks that were run
-	var statusChecks []string
-	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
-		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
-			for _, checkRun := range run.CheckRuns.Nodes {
-				statusChecks = append(statusChecks, checkRun.Name)
-			}
-		}
-	}
-
-	requiredChecks := payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts
-
-	// check whether all executed checks are required
-	missingChecks := []string{}
+// checksNotRequired returns the observed checks that are absent from the
+// required set. The control treats every executed check as one that should be
+// mandatory, so a non-empty result is a finding.
+func checksNotRequired(statusChecks, requiredChecks []string) []string {
+	missing := []string{}
 	for _, check := range statusChecks {
 		found := false
 		for _, requiredCheck := range requiredChecks {
@@ -88,15 +61,76 @@ func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gem
 			}
 		}
 		if !found {
-			missingChecks = append(missingChecks, check)
+			missing = append(missing, check)
 		}
 	}
+	return missing
+}
 
-	if len(missingChecks) > 0 {
-		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s", strings.Join(missingChecks, ", ")), confidence
+// evaluateStatusCheckRequirement makes the OSPS-QA-03.01 determination in an
+// observability-aware way. Rulesets are publicly readable, so they are the
+// authoritative source when present; otherwise the check falls back to classic
+// branch protection, which GitHub exposes only to admins. When no required-check
+// configuration is observable, the step returns NeedsReview rather than a
+// vacuous Pass (nothing proves checks are required) or a false Fail (the
+// requirement may exist but be invisible to a non-admin token).
+//
+// Both QA-03 steps share this determination so the requirement reports one
+// coherent result and message regardless of which source is authoritative.
+func evaluateStatusCheckRequirement(payload data.Payload) (gemara.Result, string) {
+	statusChecks := observedStatusChecks(payload)
+
+	var requiredChecks []string
+	var source string
+	if payload.RepositoryMetadata.HasBranchRules() {
+		requiredChecks = payload.RepositoryMetadata.RequiredStatusCheckContexts()
+		source = "rulesets"
+	} else {
+		requiredChecks = payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts
+		source = "branch protection"
 	}
 
-	return gemara.Passed, "No status checks were run that are not required by branch protection", confidence
+	// No observable required-check configuration: the requirement cannot be
+	// confirmed either way.
+	if len(requiredChecks) == 0 {
+		if len(statusChecks) > 0 {
+			return gemara.NeedsReview, "status checks run but requirement configuration is not observable without admin access"
+		}
+		return gemara.NeedsReview, "no status checks observed and status-check requirements are not observable without admin access; the latest default-branch commit may not have come from a pull request"
+	}
+
+	// Required checks are configured; every observed check should be among them.
+	if missing := checksNotRequired(statusChecks, requiredChecks); len(missing) > 0 {
+		return gemara.Failed, fmt.Sprintf("Some executed status checks are not required by %s but all should be: %s", source, strings.Join(missing, ", "))
+	}
+	if len(statusChecks) == 0 {
+		return gemara.Passed, fmt.Sprintf("Status-check requirements are configured in %s", source)
+	}
+	return gemara.Passed, fmt.Sprintf("All executed status checks are required by %s", source)
+}
+
+// StatusChecksAreRequiredByRulesets is the authoritative source for
+// OSPS-QA-03.01 when rulesets apply to the default branch; otherwise it defers
+// to branch protection (NotRun, which the aggregate ignores) while still
+// reporting the shared determination message.
+func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	result, message = evaluateStatusCheckRequirement(payload)
+	if payload.RepositoryMetadata.HasBranchRules() {
+		return result, message, confidence
+	}
+	return gemara.NotRun, message, confidence
+}
+
+// StatusChecksAreRequiredByBranchProtection is the authoritative source for
+// OSPS-QA-03.01 when no rulesets apply to the default branch; when rulesets are
+// present the rulesets step already decided, so this one defers (NotRun) while
+// echoing the shared determination message.
+func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	result, message = evaluateStatusCheckRequirement(payload)
+	if !payload.RepositoryMetadata.HasBranchRules() {
+		return result, message, confidence
+	}
+	return gemara.NotRun, message, confidence
 }
 
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
@@ -151,15 +185,7 @@ func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, mess
 }
 
 func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// get the name of all status checks that were run
-	var statusChecks []string
-	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
-		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
-			for _, checkRun := range run.CheckRuns.Nodes {
-				statusChecks = append(statusChecks, checkRun.Name)
-			}
-		}
-	}
+	statusChecks := observedStatusChecks(payload)
 
 	if len(statusChecks) > 0 {
 		return gemara.Passed, fmt.Sprintf("%d status checks were run", len(statusChecks)), confidence

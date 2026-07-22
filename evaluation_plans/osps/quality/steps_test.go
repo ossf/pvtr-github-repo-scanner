@@ -8,75 +8,10 @@ import (
 	"github.com/gemaraproj/go-gemara"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
-	"github.com/ossf/si-tooling/v2/si"
 	"github.com/privateerproj/privateer-sdk/config"
 )
 
-func Test_InsightsListsRepositories(t *testing.T) {
-	tests := []struct {
-		name       string
-		payload    data.Payload
-		wantResult gemara.Result
-		wantMsg    string
-	}{
-		{
-			name: "insights contains repositories",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Project: &si.Project{
-							Repositories: []si.ProjectRepository{
-								{
-									Url: "https://github.com/org/repo",
-								},
-							},
-						},
-					},
-				},
-			},
-			wantResult: gemara.Passed,
-			wantMsg:    "Insights contains a list of repositories",
-		},
-		{
-			name: "insights does not contain repositories",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Project: &si.Project{
-							Repositories: []si.ProjectRepository{},
-						},
-					},
-				},
-			},
-			wantResult: gemara.Failed,
-			wantMsg:    "Insights does not contain a list of repositories",
-		},
-		{
-			name: "insights is nil",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Project: &si.Project{},
-					},
-				},
-			},
-			wantResult: gemara.Failed,
-			wantMsg:    "Insights does not contain a list of repositories",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotResult, gotMsg, _ := InsightsListsRepositories(tt.payload)
-			if gotResult != tt.wantResult {
-				t.Errorf("result = %v, want %v", gotResult, tt.wantResult)
-			}
-			if gotMsg != tt.wantMsg {
-				t.Errorf("message = %q, want %q", gotMsg, tt.wantMsg)
-			}
-		})
-	}
-}
+// Tests for InsightsListsRepositories live in insights_repos_test.go.
 
 func Test_NoBinariesInRepo(t *testing.T) {
 	tests := []struct {
@@ -199,51 +134,140 @@ func graphqlWithStatusChecks(t *testing.T, names ...string) *data.GraphqlRepoDat
 	return graphql
 }
 
-func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
+// graphqlWithChecksAndBranchProtection builds the payload shape the QA-03 steps
+// read: observed check runs plus the required-status-check contexts that classic
+// branch protection reports (visible only to admins in production).
+func graphqlWithChecksAndBranchProtection(t *testing.T, observed, bpRequired []string) *data.GraphqlRepoData {
+	t.Helper()
+	graphql := graphqlWithStatusChecks(t, observed...)
+	graphql.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = bpRequired
+	return graphql
+}
+
+// Test_StatusChecksRequired covers OSPS-QA-03.01 across both steps. Rulesets are
+// authoritative when present; branch protection is the fallback and is only
+// admin-visible. The step that owns the determination returns the result; the
+// other defers with NotRun. Both report the same message so the aggregated
+// requirement stays coherent.
+func Test_StatusChecksRequired(t *testing.T) {
 	tests := []struct {
-		name          string
-		metadata      *fakeRulesetMetadata
-		checksThatRan []string
-		wantResult    gemara.Result
-		wantMsg       string
+		name       string
+		hasRules   bool
+		rulesetReq []string
+		bpRequired []string
+		observed   []string
+		wantResult gemara.Result
+		wantMsg    string
 	}{
 		{
-			name:       "no rulesets configured",
-			metadata:   &fakeRulesetMetadata{hasRules: false},
+			name:       "rulesets require checks, every observed check is required",
+			hasRules:   true,
+			rulesetReq: []string{"build", "lint"},
+			observed:   []string{"build", "lint"},
 			wantResult: gemara.Passed,
-			wantMsg:    "No rulesets found for default branch, continuing to evaluate branch protection",
+			wantMsg:    "All executed status checks are required by rulesets",
 		},
 		{
-			name:          "every check that ran is required",
-			metadata:      &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build", "lint"}},
-			checksThatRan: []string{"build", "lint"},
-			wantResult:    gemara.Passed,
-			wantMsg:       "No status checks were run that are not required by the rules",
+			name:       "rulesets require checks, an observed check is not required",
+			hasRules:   true,
+			rulesetReq: []string{"build"},
+			observed:   []string{"build", "lint"},
+			wantResult: gemara.Failed,
+			wantMsg:    "Some executed status checks are not required by rulesets but all should be: lint",
 		},
 		{
-			// The path that produces a non-passing compliance result, and the
-			// one that breaks if RequiredStatusCheckContexts reads the wrong
-			// rules now that they come from metadata rather than REST.
-			name:          "a check ran that the rulesets do not require",
-			metadata:      &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build"}},
-			checksThatRan: []string{"build", "lint"},
-			wantResult:    gemara.Failed,
-			wantMsg:       "Some executed status checks are not mandatory but all should be: lint (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)",
+			name:       "rulesets require checks, none observed in sample",
+			hasRules:   true,
+			rulesetReq: []string{"build"},
+			observed:   nil,
+			wantResult: gemara.Passed,
+			wantMsg:    "Status-check requirements are configured in rulesets",
+		},
+		{
+			name:       "rulesets present but require no checks, checks observed",
+			hasRules:   true,
+			rulesetReq: nil,
+			observed:   []string{"build"},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "status checks run but requirement configuration is not observable without admin access",
+		},
+		{
+			name:       "rulesets present but require no checks, none observed",
+			hasRules:   true,
+			rulesetReq: nil,
+			observed:   nil,
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "no status checks observed and status-check requirements are not observable without admin access; the latest default-branch commit may not have come from a pull request",
+		},
+		{
+			name:       "no rulesets, branch protection requires checks, all observed required",
+			hasRules:   false,
+			bpRequired: []string{"build"},
+			observed:   []string{"build"},
+			wantResult: gemara.Passed,
+			wantMsg:    "All executed status checks are required by branch protection",
+		},
+		{
+			name:       "no rulesets, branch protection requires checks, an observed check is not required",
+			hasRules:   false,
+			bpRequired: []string{"build"},
+			observed:   []string{"build", "lint"},
+			wantResult: gemara.Failed,
+			wantMsg:    "Some executed status checks are not required by branch protection but all should be: lint",
+		},
+		{
+			name:       "no rulesets, branch protection requires checks, none observed in sample",
+			hasRules:   false,
+			bpRequired: []string{"build"},
+			observed:   nil,
+			wantResult: gemara.Passed,
+			wantMsg:    "Status-check requirements are configured in branch protection",
+		},
+		{
+			// Non-admin false-fail case: branch protection requires checks but is
+			// invisible, so requiredChecks looks empty while checks are observed.
+			name:       "no rulesets, protection invisible, checks observed",
+			hasRules:   false,
+			bpRequired: nil,
+			observed:   []string{"build"},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "status checks run but requirement configuration is not observable without admin access",
+		},
+		{
+			// Vacuous-pass case: nothing observable and nothing ran.
+			name:       "no rulesets, nothing observable, nothing observed",
+			hasRules:   false,
+			bpRequired: nil,
+			observed:   nil,
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "no status checks observed and status-check requirements are not observable without admin access; the latest default-branch commit may not have come from a pull request",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := data.Payload{
-				GraphqlRepoData:    graphqlWithStatusChecks(t, tt.checksThatRan...),
-				RepositoryMetadata: tt.metadata,
+				GraphqlRepoData:    graphqlWithChecksAndBranchProtection(t, tt.observed, tt.bpRequired),
+				RepositoryMetadata: &fakeRulesetMetadata{hasRules: tt.hasRules, requiredChecks: tt.rulesetReq},
 			}
-			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
-			if result != tt.wantResult {
-				t.Errorf("result = %v, want %v", result, tt.wantResult)
+
+			// The authoritative step depends on whether rulesets apply; the other
+			// step defers with NotRun but reports the same message.
+			rulesetResult, rulesetMsg, _ := StatusChecksAreRequiredByRulesets(payload)
+			bpResult, bpMsg, _ := StatusChecksAreRequiredByBranchProtection(payload)
+
+			authResult, deferResult := rulesetResult, bpResult
+			if !tt.hasRules {
+				authResult, deferResult = bpResult, rulesetResult
 			}
-			if message != tt.wantMsg {
-				t.Errorf("message = %q, want %q", message, tt.wantMsg)
+			if authResult != tt.wantResult {
+				t.Errorf("authoritative result = %v, want %v", authResult, tt.wantResult)
+			}
+			if deferResult != gemara.NotRun {
+				t.Errorf("deferring result = %v, want NotRun", deferResult)
+			}
+			if rulesetMsg != tt.wantMsg || bpMsg != tt.wantMsg {
+				t.Errorf("messages = %q / %q, want both %q", rulesetMsg, bpMsg, tt.wantMsg)
 			}
 		})
 	}
