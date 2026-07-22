@@ -247,6 +247,12 @@ func pullVariablesFromScript(script string) []string {
 }
 
 func ReleaseHasUniqueIdentifier(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// With no releases there are no identifiers to check; report NotApplicable
+	// rather than passing vacuously ("all releases have a unique name").
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; release-identifier requirement does not apply", confidence
+	}
+
 	var noNameCount int
 	var sameNameFound []string
 	var releaseNames = make(map[string]int)
@@ -449,8 +455,14 @@ func releaseDescribesChanges(description string) bool {
 // changelog file in the repo root, or recognizable content in the latest
 // release notes); NeedsReview means the release carries a description a human
 // should judge; Failed means a release exists with no change documentation at
-// all. The HasMadeReleases guard in the chain ensures a release exists.
+// all.
 func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// No releases means there is no latest release to document; report
+	// NotApplicable rather than failing an empty repo for a missing changelog.
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; changelog requirement does not apply", confidence
+	}
+
 	if hasChangelogFile(payload) {
 		return gemara.Passed, "Changelog file found in repository root", gemara.Medium
 	}
