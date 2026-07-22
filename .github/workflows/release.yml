@@ -17,6 +17,7 @@ jobs:
     uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@5193129233b450e9174d4d92fcc467919a989882 # v1.2.2
     with:
       publish: true
+      release-only-with-label: true
       release-config-name: release-drafter.yml
       goreleaser-config-path: .goreleaser.yaml
       go-version-file: go.mod
