@@ -58,12 +58,12 @@ func HasSecContact(payload data.Payload) (result gemara.Result, message string, 
 
 	if payload.SecurityPolicy.Present {
 		if found, via := securityContactInPolicy(payload.SecurityPolicy.Content); found {
-			return gemara.Passed, fmt.Sprintf("No Security Insights contact, but a security contact was found in SECURITY.md (%s)", via), gemara.Medium
+			return gemara.Passed, fmt.Sprintf("An email address was found in SECURITY.md (%s)", via), gemara.Medium
 		}
 	}
 
 	if payload.PrivateVulnReporting.Enabled {
-		return gemara.Passed, "No Security Insights contact, but GitHub private vulnerability reporting is enabled as a documented reporting channel", gemara.Medium
+		return gemara.Passed, "GitHub private vulnerability reporting is enabled as a documented reporting channel", gemara.High
 	}
 
 	if payload.SecurityPolicy.Present {

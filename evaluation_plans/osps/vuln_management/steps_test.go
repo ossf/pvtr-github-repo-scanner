@@ -329,7 +329,7 @@ func TestHasSecContact(t *testing.T) {
 		{
 			name:            "SECURITY.md with contact email",
 			expectedResult:  gemara.Passed,
-			expectedMessage: "No Security Insights contact, but a security contact was found in SECURITY.md (contact email)",
+			expectedMessage: "An email address was found in SECURITY.md (contact email)",
 			payload: secContactPayload(data.SecurityPolicy{
 				Present: true,
 				Content: "Please email security@example.com to report issues.",
@@ -338,7 +338,7 @@ func TestHasSecContact(t *testing.T) {
 		{
 			name:            "SECURITY.md with reporting instructions",
 			expectedResult:  gemara.Passed,
-			expectedMessage: "No Security Insights contact, but a security contact was found in SECURITY.md (private-reporting instructions)",
+			expectedMessage: "An email address was found in SECURITY.md (private-reporting instructions)",
 			payload: secContactPayload(data.SecurityPolicy{
 				Present: true,
 				Content: "Use GitHub private vulnerability reporting to disclose issues.",
@@ -347,7 +347,7 @@ func TestHasSecContact(t *testing.T) {
 		{
 			name:            "SECURITY.md with reporting URL",
 			expectedResult:  gemara.Passed,
-			expectedMessage: "No Security Insights contact, but a security contact was found in SECURITY.md (reporting URL)",
+			expectedMessage: "An email address was found in SECURITY.md (reporting URL)",
 			payload: secContactPayload(data.SecurityPolicy{
 				Present: true,
 				Content: "See our disclosure form at https://example.com/report for details.",
@@ -356,7 +356,7 @@ func TestHasSecContact(t *testing.T) {
 		{
 			name:            "No SI or SECURITY.md but private reporting enabled",
 			expectedResult:  gemara.Passed,
-			expectedMessage: "No Security Insights contact, but GitHub private vulnerability reporting is enabled as a documented reporting channel",
+			expectedMessage: "GitHub private vulnerability reporting is enabled as a documented reporting channel",
 			payload:         secContactPayload(data.SecurityPolicy{}, data.PrivateVulnReporting{Enabled: true, Known: true}),
 		},
 		{
