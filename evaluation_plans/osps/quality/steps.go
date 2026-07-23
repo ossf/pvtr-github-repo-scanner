@@ -34,19 +34,13 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 		}
 	}
 
-	// get the rules that apply to the default branch
-	rules := payload.GetRulesets(payload.Repository.DefaultBranchRef.Name)
-	if len(rules) == 0 {
+	// Branch rulesets are fetched once during payload load.
+	if !payload.RepositoryMetadata.HasBranchRules() {
 		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
 	}
 
 	// get the name of all required status checks
-	var requiredChecks []string
-	for _, rule := range payload.Rulesets {
-		for _, requiredCheck := range rule.Parameters.RequiredChecks {
-			requiredChecks = append(requiredChecks, requiredCheck.Context)
-		}
-	}
+	requiredChecks := payload.RepositoryMetadata.RequiredStatusCheckContexts()
 
 	// check whether all executed checks are required
 	missingChecks := []string{}
@@ -108,9 +102,9 @@ func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gem
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	// TODO: This only checks the top 3 levels of the repository tree
 	// for common binary file extensions and it fails on very large repositories.
-	suspectedBinaries, err := payload.GetSuspectedBinaries()
-	if err != nil {
-		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", err.Error()))
+	suspectedBinaries := payload.Binaries.Suspected
+	if payload.Binaries.Err != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", payload.Binaries.Err.Error()))
 		return gemara.Unknown, "Error while scanning repository for binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
@@ -125,11 +119,9 @@ func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message strin
 // artifacts such as compiled executables, shared libraries, or archive binaries.
 // Acceptable binary content (images, audio, video, fonts, PDFs) is not flagged.
 func NoUnreviewableBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	unreviewableBinaries, err := payload.GetUnreviewableBinaries()
-	if err != nil {
-		if payload.Config != nil && payload.Config.Logger != nil {
-			payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", err.Error()))
-		}
+	unreviewableBinaries := payload.Binaries.Unreviewable
+	if payload.Binaries.Err != nil {
+		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for unreviewable binaries: %s", payload.Binaries.Err.Error()))
 		return gemara.Unknown, "Error while scanning repository for unreviewable binaries, potentially due to repo size. See logs for details.", confidence
 	}
 
@@ -188,12 +180,69 @@ func VerifyDependencyManagement(payload data.Payload) (result gemara.Result, mes
 	return countDependencyManifests(payload)
 }
 
+// dependencyManifestNames are well-known dependency manifest and lockfile names,
+// matched case-insensitively against exact file names in the repository root.
+var dependencyManifestNames = []string{
+	"go.mod", "go.sum",
+	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+	"requirements.txt", "requirements-dev.txt", "Pipfile", "Pipfile.lock",
+	"pyproject.toml", "poetry.lock", "uv.lock", "setup.py", "setup.cfg",
+	"Cargo.toml", "Cargo.lock",
+	"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+	"Gemfile", "Gemfile.lock",
+	"composer.json", "composer.lock",
+	"mix.exs", "Package.swift", "pubspec.yaml", "packages.config",
+	"flake.nix", "vcpkg.json", "conanfile.txt", "conanfile.py",
+}
+
 func countDependencyManifests(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	manifestsCount := payload.DependencyManifestsCount
 	if manifestsCount > 0 {
-		return gemara.Passed, fmt.Sprintf("Found %d dependency manifests from GitHub API", manifestsCount), confidence
+		return gemara.Passed, fmt.Sprintf("Found %d dependency manifests from GitHub API", manifestsCount), gemara.High
 	}
-	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.", confidence
+
+	// The dependency graph API returned nothing, which happens when the graph is
+	// disabled or has not indexed the repo. Fall back to direct observation of the
+	// root tree before punting to NeedsReview.
+	found := findDependencyManifests(payload)
+	if len(found) > 0 {
+		return gemara.Passed, fmt.Sprintf("dependency manifest(s) found in repository root: %s", strings.Join(found, ", ")), gemara.Medium
+	}
+
+	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph API. Review project to ensure dependencies are managed.", gemara.Low
+}
+
+// findDependencyManifests scans the repository root tree (blobs only) for
+// well-known dependency manifests and lockfiles, returning the matched names.
+func findDependencyManifests(payload data.Payload) []string {
+	if payload.GraphqlRepoData == nil {
+		return nil
+	}
+
+	var found []string
+	for _, entry := range payload.Repository.Object.Tree.Entries {
+		if entry.Type != "blob" {
+			continue
+		}
+		if isDependencyManifest(entry.Name) {
+			found = append(found, entry.Name)
+		}
+	}
+	return found
+}
+
+// isDependencyManifest reports whether name is a well-known dependency manifest,
+// matching known names case-insensitively plus any *.csproj project file.
+func isDependencyManifest(name string) bool {
+	if strings.HasSuffix(strings.ToLower(name), ".csproj") {
+		return true
+	}
+	for _, manifest := range dependencyManifestNames {
+		if strings.EqualFold(name, manifest) {
+			return true
+		}
+	}
+	return false
 }
 
 func DocumentsTestExecution(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

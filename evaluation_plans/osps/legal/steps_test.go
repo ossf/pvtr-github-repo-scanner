@@ -24,6 +24,86 @@ func stubGraphqlRepo(licenseUrl string) *data.GraphqlRepoData {
 	return repo
 }
 
+type treeEntry struct {
+	name string
+	typ  string
+}
+
+// stubGraphqlRepoWithTree builds repo data with a license URL and the given root
+// tree entries, mirroring the anonymous entry struct in the GraphQL query.
+func stubGraphqlRepoWithTree(licenseUrl string, entries ...treeEntry) *data.GraphqlRepoData {
+	repo := stubGraphqlRepo(licenseUrl)
+	for _, e := range entries {
+		typ := e.typ
+		if typ == "" {
+			typ = "blob"
+		}
+		repo.Repository.Object.Tree.Entries = append(
+			repo.Repository.Object.Tree.Entries,
+			struct {
+				Name string
+				Type string
+				Path string
+			}{Name: e.name, Type: typ},
+		)
+	}
+	return repo
+}
+
+func TestFoundLicense(t *testing.T) {
+	tests := []struct {
+		name            string
+		payload         data.Payload
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name:            "GitHub identifies the license",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepo("https://api.github.com/licenses/mit")},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "License was found in a well known location via the GitHub API",
+		},
+		{
+			name:            "unclassified LICENSE file in root",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "LICENSE"})},
+			expectedResult:  gemara.Passed,
+			expectedMessage: `License file "LICENSE" found in the repository root, a well known location; GitHub could not identify the license type`,
+		},
+		{
+			name:            "per-license LICENSE-MIT file in root",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "LICENSE-MIT"})},
+			expectedResult:  gemara.Passed,
+			expectedMessage: `License file "LICENSE-MIT" found in the repository root, a well known location; GitHub could not identify the license type`,
+		},
+		{
+			name:            "COPYING file in root, case-insensitive",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "copying"})},
+			expectedResult:  gemara.Passed,
+			expectedMessage: `License file "copying" found in the repository root, a well known location; GitHub could not identify the license type`,
+		},
+		{
+			name:            "a directory named LICENSE is not a license file",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "LICENSE", typ: "tree"})},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "License was not found in a well known location via the GitHub API",
+		},
+		{
+			name:            "no license anywhere",
+			payload:         data.Payload{GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "README.md"})},
+			expectedResult:  gemara.Failed,
+			expectedMessage: "License was not found in a well known location via the GitHub API",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, message, _ := FoundLicense(test.payload)
+			assert.Equal(t, test.expectedResult, result)
+			assert.Equal(t, test.expectedMessage, message)
+		})
+	}
+}
+
 func TestReleasesLicensed(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -70,6 +150,21 @@ func TestReleasesLicensed(t *testing.T) {
 			},
 			expectedResult:  gemara.Passed,
 			expectedMessage: "GitHub releases include the license(s) in the released source code.",
+		},
+		{
+			name: "Release with unclassified root license file",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{
+						{
+							Name: "v1.0.0",
+						},
+					},
+				},
+				GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "LICENSE"}),
+			},
+			expectedResult:  gemara.Passed,
+			expectedMessage: `License file "LICENSE" found in the repository root; GitHub could not identify the license type`,
 		},
 	}
 
@@ -312,6 +407,47 @@ func TestGoodLicense(t *testing.T) {
 			apiError:        nil,
 			expectedResult:  gemara.Failed,
 			expectedMessage: "These licenses are not OSI or FSF approved: BadLicense",
+		},
+		{
+			name: "NOASSERTION with a license file present needs review",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepoWithTree("", treeEntry{name: "LICENSE"})
+					repo.Repository.LicenseInfo.SpdxId = "NOASSERTION"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"MIT","isOsiApproved":true,"isFsfLibre":false}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: `License file "LICENSE" is present but its SPDX identity could not be determined; manual review is required to confirm OSI or FSF approval`,
+		},
+		{
+			name: "NOASSERTION with no license file fails",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "NOASSERTION"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"MIT","isOsiApproved":true,"isFsfLibre":false}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Failed,
+			expectedMessage: "License SPDX identifier was not found in Security Insights data or via GitHub API",
+		},
+		{
+			name: "No SPDX id but a license file present needs review",
+			payload: data.Payload{
+				GraphqlRepoData: stubGraphqlRepoWithTree("", treeEntry{name: "COPYING"}),
+				Config:          &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"MIT","isOsiApproved":true,"isFsfLibre":false}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: `License file "COPYING" is present but its SPDX identity could not be determined; manual review is required to confirm OSI or FSF approval`,
 		},
 		{
 			name: "Deprecated and non-approved license fails",

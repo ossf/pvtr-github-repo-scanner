@@ -17,6 +17,8 @@ type FakeBranchRuleMetadata struct {
 	defaultBranchProtected *bool
 	requiresPRReviews      *bool
 	protectedFromDeletion  *bool
+	rulesetsObserved       bool
+	viewerCanAdminister    bool
 }
 
 func (f *FakeBranchRuleMetadata) IsDefaultBranchProtected() *bool {
@@ -31,6 +33,14 @@ func (f *FakeBranchRuleMetadata) IsDefaultBranchProtectedFromDeletion() *bool {
 	return f.protectedFromDeletion
 }
 
+func (f *FakeBranchRuleMetadata) RulesetsObserved() bool {
+	return f.rulesetsObserved
+}
+
+func (f *FakeBranchRuleMetadata) ViewerCanAdminister() bool {
+	return f.viewerCanAdminister
+}
+
 // See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#setting-the-permissions-of-the-github_token-for-your-repository
 func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 	tests := []struct {
@@ -43,7 +53,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, read permissions and no PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "read", // read access for the contents and packages permissions
 						CanApprovePullRequest: false,  // cannot create or approve PRs
@@ -57,7 +68,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, read permissions, but allows PR approvals",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "read", // read access for the contents and packages permissions
 						CanApprovePullRequest: true,   // can create & approve PRs
@@ -71,7 +83,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, write permissions and no PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write", // read & write access for all permission scopes
 						CanApprovePullRequest: false,   // cannot create or approve PRs (in theory at least)
@@ -85,7 +98,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows enabled, write permissions and PR permissions",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: true,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            true,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write",
 						CanApprovePullRequest: true,
@@ -99,7 +113,8 @@ func Test_WorkflowDefaultReadPermissions(t *testing.T) {
 			name: "Workflows disabled",
 			payload: data.Payload{
 				RestData: &data.RestData{
-					WorkflowsEnabled: false,
+					WorkflowPermissionsObserved: true,
+					WorkflowsEnabled:            false,
 					WorkflowPermissions: data.WorkflowPermissions{
 						DefaultPermissions:    "write",
 						CanApprovePullRequest: true,
@@ -154,6 +169,7 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &trueVal,
+					rulesetsObserved:       true,
 				},
 			},
 			wantResult:  gemara.Passed,
@@ -166,31 +182,48 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &falseVal,
 					requiresPRReviews:      &trueVal,
+					rulesetsObserved:       true,
 				},
 			},
 			wantResult:  gemara.Passed,
 			wantMessage: "Branch rule requires approving reviews",
 		},
 		{
-			name: "no branch protection and no ruleset protection",
+			name: "observed unprotected: rulesets visible and empty, admin token",
 			payload: data.Payload{
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					defaultBranchProtected: &falseVal,
 					requiresPRReviews:      &falseVal,
+					rulesetsObserved:       true,
+					viewerCanAdminister:    true,
 				},
 			},
 			wantResult:  gemara.Failed,
-			wantMessage: "Default branch is not protected",
+			wantMessage: "Found Ruleset, but not protection of the default branch",
 		},
 		{
-			name: "no branch protection and no ruleset data",
+			name: "unobservable: rulesets visible and empty but non-admin token",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					defaultBranchProtected: &falseVal,
+					requiresPRReviews:      &falseVal,
+					rulesetsObserved:       true,
+					viewerCanAdminister:    false,
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
+		},
+		{
+			name: "unobservable: no ruleset data and non-admin token",
 			payload: data.Payload{
 				GraphqlRepoData:    &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{},
 			},
-			wantResult:  gemara.Failed,
-			wantMessage: "Default branch is not protected",
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
 		},
 	}
 
@@ -218,20 +251,23 @@ func Test_BranchProtectionPreventsDeletion(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name: "branch protection prevents deletion, no rulesets",
+			name: "admin token, branch protection prevents deletion, no rulesets",
 			payload: data.Payload{
-				GraphqlRepoData:    &data.GraphqlRepoData{},
-				RepositoryMetadata: &FakeBranchRuleMetadata{},
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					viewerCanAdminister: true,
+				},
 			},
 			wantResult:  gemara.Passed,
 			wantMessage: "Default branch is protected from deletions by branch protection rules",
 		},
 		{
-			name: "branch protection prevents deletion, ruleset also prevents deletion",
+			name: "ruleset prevents deletion (trustworthy without admin)",
 			payload: data.Payload{
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					protectedFromDeletion: &trueVal,
+					rulesetsObserved:      true,
 				},
 			},
 			wantResult:  gemara.Passed,
@@ -243,35 +279,62 @@ func Test_BranchProtectionPreventsDeletion(t *testing.T) {
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					protectedFromDeletion: &trueVal,
+					rulesetsObserved:      true,
 				},
 			},
 			wantResult:  gemara.Passed,
 			wantMessage: "Default branch is protected from deletions by rulesets",
 		},
 		{
-			name: "branch protection allows deletion and no ruleset data",
-			payload: data.Payload{
-				GraphqlRepoData:    &data.GraphqlRepoData{},
-				RepositoryMetadata: &FakeBranchRuleMetadata{},
-			},
-			wantResult:  gemara.Failed,
-			wantMessage: "Default branch is not protected from deletions",
-		},
-		{
-			name: "branch protection allows deletion and ruleset allows deletion",
+			name: "admin token, branch protection allows deletion, no ruleset protection",
 			payload: data.Payload{
 				GraphqlRepoData: &data.GraphqlRepoData{},
 				RepositoryMetadata: &FakeBranchRuleMetadata{
-					protectedFromDeletion: &falseVal,
+					viewerCanAdminister: true,
 				},
 			},
 			wantResult:  gemara.Failed,
 			wantMessage: "Default branch is not protected from deletions",
 		},
+		{
+			name: "admin token, branch protection allows deletion and ruleset allows deletion",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFromDeletion: &falseVal,
+					rulesetsObserved:      true,
+					viewerCanAdminister:   true,
+				},
+			},
+			wantResult:  gemara.Failed,
+			wantMessage: "Default branch is not protected from deletions",
+		},
+		{
+			name: "false-pass regression: non-admin token, deletion data invisible, no ruleset protection",
+			payload: data.Payload{
+				GraphqlRepoData:    &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
+		},
+		{
+			name: "unobservable: non-admin token, ruleset visible without deletion protection",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFromDeletion: &falseVal,
+					rulesetsObserved:      true,
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
+		},
 	}
 
-	// AllowsDeletions defaults to false (branch protection prevents deletion)
-	// Set it to true for cases where branch protection allows deletion
+	// AllowsDeletions defaults to false (a visible rule prevents deletion). Set it
+	// to true for the cases where branch protection allows deletion. Indexes track
+	// the tests slice above.
 	tests[2].payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions = true
 	tests[3].payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions = true
 	tests[4].payload.Repository.DefaultBranchRef.RefUpdateRule.AllowsDeletions = true
