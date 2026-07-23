@@ -29,6 +29,10 @@ func TestBuildSecurityPosture_NoSecurityConfig(t *testing.T) {
 	assert.False(t, sp.PreventsPushingSecrets())
 	assert.False(t, sp.ScansForSecrets())
 	assert.False(t, sp.DefinesPolicyForHandlingSecrets())
+	// No security_and_analysis block (e.g. a repo we lack admin access to) and no
+	// Security Insights claim: the status is unobservable, not disabled.
+	assert.False(t, sp.SecretScanningObservable())
+	assert.False(t, sp.InsightsDeclaresSecretScanning())
 }
 
 func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
@@ -51,6 +55,7 @@ func TestBuildSecurityPosture_SecretScanningEnabled(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, sp.PreventsPushingSecrets())
 	assert.True(t, sp.ScansForSecrets())
+	assert.True(t, sp.SecretScanningObservable())
 }
 
 func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *testing.T) {
@@ -68,8 +73,12 @@ func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *te
 	}
 	sp, err := buildSecurityPosture(repo, rd)
 	assert.NoError(t, err)
-	assert.True(t, sp.PreventsPushingSecrets())
-	assert.True(t, sp.ScansForSecrets())
+	// The GitHub block is unreadable, so the observed settings are false and the
+	// status is unobservable; the declaration is surfaced on its own signal.
+	assert.False(t, sp.PreventsPushingSecrets())
+	assert.False(t, sp.ScansForSecrets())
+	assert.False(t, sp.SecretScanningObservable())
+	assert.True(t, sp.InsightsDeclaresSecretScanning())
 }
 
 func TestBuildSecurityPosture_ScanningEnabledPushProtectionDisabled(t *testing.T) {
@@ -115,8 +124,12 @@ func TestBuildSecurityPosture_SecretScanningDisabledButInsightsTooling(t *testin
 	}
 	sp, err := buildSecurityPosture(repo, rd)
 	assert.NoError(t, err)
-	assert.True(t, sp.PreventsPushingSecrets())
-	assert.True(t, sp.ScansForSecrets())
+	// GitHub observed both settings off, but Security Insights declares tooling —
+	// the observed and declared signals are reported independently.
+	assert.False(t, sp.PreventsPushingSecrets())
+	assert.False(t, sp.ScansForSecrets())
+	assert.True(t, sp.SecretScanningObservable())
+	assert.True(t, sp.InsightsDeclaresSecretScanning())
 }
 
 func TestInsightsClaimsSecretsTooling(t *testing.T) {

@@ -1,7 +1,6 @@
 package build_release
 
 import (
-	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -52,45 +51,60 @@ var (
 		`github\.ref_name).*`)
 )
 
-// checkAllWorkflows verifies the payload, iterates over all workflow files, and
-// applies checkWorkflow to each parsed workflow. passMessage is returned when all files pass.
+// checkAllWorkflows fetches the repository's workflow files and evaluates each
+// one with checkWorkflow. passMessage is returned when all files pass.
 func checkAllWorkflows(payload data.Payload, checkWorkflow func(*actionlint.Workflow) (bool, string), passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	var confidence gemara.ConfidenceLevel
-	var message string
 
-	workflows, err := payload.GetDirectoryContent(".github/workflows")
+	workflows, err := payload.GetWorkflowFiles()
 	if len(workflows) == 0 {
+		message := "No workflows found in .github/workflows directory"
 		if err != nil {
 			message = err.Error()
-		} else {
-			message = "No workflows found in .github/workflows directory"
 		}
 		return gemara.NotApplicable, message, confidence
 	}
 
+	return evaluateWorkflows(workflows, checkWorkflow, passMessage)
+}
+
+// evaluateWorkflows applies checkWorkflow to each parsed workflow.
+//
+// A file we could not retrieve or parse is reported as NeedsReview, not Failed.
+// Failed asserts that the repository violates the control, which we have not
+// observed for a file we never read; NeedsReview says so honestly and puts it in
+// front of a human. An actual violation in a file we did parse still wins, so
+// unreadable siblings can never mask a real finding.
+func evaluateWorkflows(workflows []data.WorkflowFile, checkWorkflow func(*actionlint.Workflow) (bool, string), passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
+	var confidence gemara.ConfidenceLevel
+	var uninspected []string
+
 	for _, file := range workflows {
-		if !strings.HasSuffix(*file.Name, ".yml") && !strings.HasSuffix(*file.Name, ".yaml") {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
 			continue
 		}
 
-		if *file.Encoding != "base64" {
-			return gemara.Failed, fmt.Sprintf("File %v is not base64 encoded", file.Name), confidence
+		if file.Truncated {
+			uninspected = append(uninspected, fmt.Sprintf("%s (too large to retrieve)", file.Path))
+			continue
 		}
 
-		decoded, err := base64.StdEncoding.DecodeString(*file.Content)
-		if err != nil {
-			return gemara.Failed, fmt.Sprintf("Error decoding workflow file: %v", err), confidence
-		}
-
-		workflow, actionError := actionlint.Parse(decoded)
+		workflow, actionError := actionlint.Parse([]byte(file.Content))
 		if actionError != nil {
-			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", actionError, *file.Path), confidence
+			uninspected = append(uninspected, fmt.Sprintf("%s (%v)", file.Path, actionError))
+			continue
 		}
 
 		ok, message := checkWorkflow(workflow)
 		if !ok {
 			return gemara.Failed, message, confidence
 		}
+	}
+
+	if len(uninspected) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf(
+			"Unable to evaluate %d of %d workflow files, manual review required: %s",
+			len(uninspected), len(workflows), strings.Join(uninspected, "; ")), confidence
 	}
 
 	return gemara.Passed, passMessage, confidence
@@ -233,6 +247,12 @@ func pullVariablesFromScript(script string) []string {
 }
 
 func ReleaseHasUniqueIdentifier(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// With no releases there are no identifiers to check; report NotApplicable
+	// rather than passing vacuously ("all releases have a unique name").
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; release-identifier requirement does not apply", confidence
+	}
+
 	var noNameCount int
 	var sameNameFound []string
 	var releaseNames = make(map[string]int)
@@ -318,64 +338,319 @@ func insecureURI(uri string) bool {
 	return true
 }
 
+// observableLinks returns the project links that can be checked without a
+// Security Insights file: the repository homepage and release asset download
+// URLs. GitHub serves both over HTTPS, so an empty set is not a violation.
+func observableLinks(payload data.Payload) []string {
+	var links []string
+	if homepage := payload.RepositoryMetadata.Homepage(); homepage != "" {
+		links = append(links, homepage)
+	}
+	for _, release := range payload.Releases {
+		for _, asset := range release.Assets {
+			if asset.DownloadURL != "" {
+				links = append(links, asset.DownloadURL)
+			}
+		}
+	}
+	return links
+}
+
 func EnsureInsightsLinksUseHTTPS(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	links := getLinks(payload)
+	// With a Security Insights file, enumerate every declared link. Without one
+	// (the common case), fall back to the directly observable link set rather
+	// than punting to a human for links we can actually see.
+	if payload.Insights.Header.URL != "" {
+		var badURIs []string
+		for _, link := range getLinks(payload) {
+			if insecureURI(link) {
+				badURIs = append(badURIs, link)
+			}
+		}
+		if len(badURIs) > 0 {
+			return gemara.Failed, fmt.Sprintf("The following links do not use HTTPS: %v", strings.Join(badURIs, ", ")), gemara.High
+		}
+		return gemara.Passed, "All links use HTTPS", gemara.High
+	}
+
 	var badURIs []string
-	for _, link := range links {
+	for _, link := range observableLinks(payload) {
 		if insecureURI(link) {
 			badURIs = append(badURIs, link)
 		}
 	}
 	if len(badURIs) > 0 {
-		return gemara.Failed, fmt.Sprintf("The following links do not use HTTPS: %v", strings.Join(badURIs, ", ")), confidence
+		return gemara.Failed, "The following observable project links do not use HTTPS: " + strings.Join(badURIs, ", "), gemara.High
 	}
-	return gemara.Passed, "All links use HTTPS", confidence
+	return gemara.Passed, "All observable project links use HTTPS (Security Insights not present; checked homepage and release assets)", gemara.Medium
 }
 
-func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	releaseDescription := payload.Repository.LatestRelease.Description
-	if strings.Contains(releaseDescription, "Change Log") || strings.Contains(releaseDescription, "Changelog") {
-		return gemara.Passed, "Mention of a changelog found in the latest release", confidence
-	}
-	return gemara.Failed, "The latest release does not have mention of a changelog: \n" + releaseDescription, confidence
+// changelogFileNames are repository-root basenames (lower-cased, extension
+// stripped) that conventionally hold change-log content.
+var changelogFileNames = map[string]bool{
+	"changelog":     true,
+	"changes":       true,
+	"history":       true,
+	"news":          true,
+	"releasenotes":  true,
+	"release_notes": true,
 }
 
-func InsightsHasSlsaAttestation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	attestations := payload.Insights.Repository.ReleaseDetails.Attestations
+// changelogFileExtensions are the extensions accepted alongside the names above.
+// The empty string covers extension-less files such as a bare CHANGELOG.
+var changelogFileExtensions = map[string]bool{
+	"":     true,
+	".md":  true,
+	".rst": true,
+	".txt": true,
+}
 
-	for _, attestation := range attestations {
-		if attestation.PredicateURI == "https://slsa.dev/provenance/v1" {
-			return gemara.Passed, "Found SLSA attestation in security insights", confidence
+// changelogReleaseMarkers are case-insensitive substrings in a release
+// description that indicate change-log content. They cover hand-written notes
+// as well as the headings and compare link GitHub emits for auto-generated
+// release notes ("## What's Changed" ... "**Full Changelog**: .../compare/...").
+var changelogReleaseMarkers = []string{
+	"changelog",
+	"change log",
+	"what's changed",
+	"release notes",
+	"/compare/",
+}
+
+// hasChangelogFile reports whether the repository root tree contains a file
+// whose name matches a recognized change-log convention. It reads the tree
+// already present in the payload, so it costs no additional API calls.
+func hasChangelogFile(payload data.Payload) bool {
+	for _, entry := range payload.Repository.Object.Tree.Entries {
+		if entry.Type != "blob" {
+			continue
+		}
+		name := strings.ToLower(entry.Name)
+		ext := ""
+		if dot := strings.LastIndex(name, "."); dot != -1 {
+			ext = name[dot:]
+			name = name[:dot]
+		}
+		if changelogFileNames[name] && changelogFileExtensions[ext] {
+			return true
 		}
 	}
-	return gemara.Failed, "No SLSA attestation found in security insights", confidence
+	return false
+}
+
+// releaseDescribesChanges reports whether a release description contains any
+// recognized change-log marker (case-insensitive).
+func releaseDescribesChanges(description string) bool {
+	lower := strings.ToLower(description)
+	for _, marker := range changelogReleaseMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureLatestReleaseHasChangelog assesses whether the project documents what
+// changed in its releases. Passed means we observed change-log content (a
+// changelog file in the repo root, or recognizable content in the latest
+// release notes); NeedsReview means the release carries a description a human
+// should judge; Failed means a release exists with no change documentation at
+// all.
+func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// No releases means there is no latest release to document; report
+	// NotApplicable rather than failing an empty repo for a missing changelog.
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; changelog requirement does not apply", confidence
+	}
+
+	if hasChangelogFile(payload) {
+		return gemara.Passed, "Changelog file found in repository root", gemara.Medium
+	}
+
+	description := payload.Repository.LatestRelease.Description
+	if releaseDescribesChanges(description) {
+		return gemara.Passed, "Changelog content found in latest release notes", gemara.High
+	}
+
+	if strings.TrimSpace(description) == "" {
+		return gemara.Failed, "The latest release has no description and no changelog file was found in the repository root", gemara.Medium
+	}
+
+	return gemara.NeedsReview, "The latest release description has no recognized changelog markers; manual review required", gemara.Low
+}
+
+// signatureAssetKinds maps each release-asset suffix to the artifact kind a
+// passing result should name. The suffixes mirror Scorecard's Signed-Releases
+// check (which BR-06 maps to), plus detached GPG signatures (.gpg/.pgp) that its
+// .asc-only list omits. The sets are disjoint, so match order is irrelevant.
+var signatureAssetKinds = []struct {
+	kind     string
+	suffixes []string
+}{
+	{"an in-toto/SLSA provenance attestation", []string{".intoto.jsonl"}},
+	{"a Sigstore bundle", []string{".sigstore", ".sigstore.json"}},
+	{"a cryptographic signature", []string{".sig", ".asc", ".sign", ".minisig", ".gpg", ".pgp"}},
+}
+
+// A checksum manifest accounts for each asset's hash but does not prove it is
+// signed. Markers are matched as substrings because release tooling commonly
+// prefixes the project and version (e.g. "gh_2.96.0_checksums.txt").
+var (
+	hashManifestSuffixes = []string{".sha256", ".sha512", ".sha1", ".sha256sum", ".sha512sum", ".md5"}
+	hashManifestMarkers  = []string{"checksums", "sha256sums", "sha512sums"}
+)
+
+// signatureAssetKind returns the human-readable artifact kind for a release
+// asset that evidences signing, or "" if the name matches no known suffix.
+func signatureAssetKind(lowerName string) string {
+	for _, group := range signatureAssetKinds {
+		for _, suffix := range group.suffixes {
+			if strings.HasSuffix(lowerName, suffix) {
+				return group.kind
+			}
+		}
+	}
+	return ""
+}
+
+func isHashManifest(lowerName string) bool {
+	for _, suffix := range hashManifestSuffixes {
+		if strings.HasSuffix(lowerName, suffix) {
+			return true
+		}
+	}
+	for _, marker := range hashManifestMarkers {
+		if strings.Contains(lowerName, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReleasesAreSignedOrAttested evaluates OSPS-BR-06.01: released assets must be
+// signed, or accounted for in a signed manifest. Evidence comes from a
+// self-declared SLSA attestation in Security Insights or the signature assets
+// published with the release; a bare checksum manifest is flagged for review.
+//
+// Native GitHub artifact attestations (via the attestations API, not attached to
+// the release) are invisible here, so a project relying solely on those and
+// declaring nothing in Security Insights lands in review rather than passing.
+func ReleasesAreSignedOrAttested(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// No releases means nothing to sign. Guard here so an empty repo reports
+	// NotApplicable rather than falling through to the asset checks below, which
+	// would misreport it as a release that published no attached assets.
+	if len(payload.Releases) == 0 {
+		return gemara.NotApplicable, "No releases found; release-signing requirement does not apply", gemara.High
+	}
+
+	// Prefer a self-declared SLSA attestation in Security Insights.
+	for _, attestation := range payload.Insights.Repository.ReleaseDetails.Attestations {
+		if strings.Contains(strings.ToLower(attestation.PredicateURI), "slsa.dev") {
+			return gemara.Passed, "SLSA attestation declared in Security Insights", gemara.High
+		}
+	}
+
+	// Otherwise inspect the published assets for signatures or attestations.
+	sawHashManifest := false
+	totalAssets := 0
+	for _, release := range payload.Releases {
+		for _, asset := range release.Assets {
+			totalAssets++
+			name := strings.ToLower(asset.Name)
+			if kind := signatureAssetKind(name); kind != "" {
+				return gemara.Passed, fmt.Sprintf("Release %q publishes %s (%s)", release.TagName, kind, asset.Name), gemara.Medium
+			}
+			if isHashManifest(name) {
+				sawHashManifest = true
+			}
+		}
+	}
+
+	// A checksum manifest alone does not prove it is signed — send it to review.
+	if sawHashManifest {
+		return gemara.NeedsReview, "Release publishes a checksum manifest but no signature or attestation was observed; verify the manifest is signed", gemara.Low
+	}
+
+	// Nothing attached to inspect: binaries may live (and be signed) outside
+	// GitHub releases, so this is unknown rather than a failure.
+	if totalAssets == 0 {
+		return gemara.NeedsReview, "Releases exist but publish no attached assets to inspect for signatures; distribution and signing may occur outside GitHub releases", gemara.Low
+	}
+
+	return gemara.Failed, "No release signature, attestation, or signed manifest found in Security Insights or release assets", gemara.Medium
 }
 
 func DistributionPointsUseHTTPS(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	distributionPoints := payload.Insights.Repository.ReleaseDetails.DistributionPoints
 
-	if len(distributionPoints) == 0 {
+	if len(distributionPoints) > 0 {
+		var badURIs []string
+		for _, point := range distributionPoints {
+			if insecureURI(point.Uri) {
+				badURIs = append(badURIs, point.Uri)
+			}
+		}
+		if len(badURIs) > 0 {
+			return gemara.Failed, fmt.Sprintf("The following distribution points do not use HTTPS: %v", strings.Join(badURIs, ", ")), gemara.High
+		}
+		return gemara.Passed, "All distribution points use HTTPS", gemara.High
+	}
+
+	// Security Insights declares no distribution points. Release assets are the
+	// observable distribution points, so evaluate those before concluding the
+	// control does not apply.
+	var assetURLs []string
+	for _, release := range payload.Releases {
+		for _, asset := range release.Assets {
+			if asset.DownloadURL != "" {
+				assetURLs = append(assetURLs, asset.DownloadURL)
+			}
+		}
+	}
+	if len(assetURLs) == 0 {
 		return gemara.NotApplicable, "No official distribution points found in Security Insights data", confidence
 	}
 
 	var badURIs []string
-	for _, point := range distributionPoints {
-		if insecureURI(point.Uri) {
-			badURIs = append(badURIs, point.Uri)
+	for _, url := range assetURLs {
+		if insecureURI(url) {
+			badURIs = append(badURIs, url)
 		}
 	}
 	if len(badURIs) > 0 {
-		return gemara.Failed, fmt.Sprintf("The following distribution points do not use HTTPS: %v", strings.Join(badURIs, ", ")), confidence
+		return gemara.Failed, "The following release asset distribution points do not use HTTPS: " + strings.Join(badURIs, ", "), gemara.High
 	}
-	return gemara.Passed, "All distribution points use HTTPS", confidence
+	return gemara.Passed, "All release asset distribution points use HTTPS (checked release assets; Security Insights not present)", gemara.Medium
 }
 
 func SecretScanningInUse(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if payload.SecurityPosture.PreventsPushingSecrets() && payload.SecurityPosture.ScansForSecrets() {
-		return gemara.Passed, "Secret scanning is enabled and prevents pushing secrets", confidence
-	} else if payload.SecurityPosture.PreventsPushingSecrets() || payload.SecurityPosture.ScansForSecrets() {
-		return gemara.Failed, "Secret scanning is only partially enabled", confidence
-	} else {
-		return gemara.Failed, "Secret scanning is not enabled", confidence
+	sp := payload.SecurityPosture
+
+	// Strongest evidence: GitHub itself reports both native controls enabled.
+	if sp.ScansForSecrets() && sp.PreventsPushingSecrets() {
+		return gemara.Passed, "GitHub secret scanning and push protection are both enabled", gemara.High
 	}
+
+	// A Security Insights self-declaration counts even when GitHub's native
+	// settings are off or unreadable (the project may use third-party tooling),
+	// but it is self-reported, so lower confidence than an observed setting.
+	if sp.InsightsDeclaresSecretScanning() {
+		return gemara.Passed, "Security Insights declares secret-scanning tooling", gemara.Medium
+	}
+
+	// Partial native coverage: name the control that is missing.
+	if sp.ScansForSecrets() {
+		return gemara.Failed, "GitHub secret scanning is enabled, but push protection is not", gemara.Medium
+	}
+	if sp.PreventsPushingSecrets() {
+		return gemara.Failed, "GitHub push protection is enabled, but secret scanning is not", gemara.Medium
+	}
+
+	// Nothing enabled and nothing declared. Distinguish "we could not read it"
+	// from "it is off": GitHub returns security_and_analysis only to repository
+	// admins, so an unreadable status is unknown rather than a failure.
+	if !sp.SecretScanningObservable() {
+		return gemara.NeedsReview, "Secret scanning status is not observable with the current token; reading it requires repository admin access, and no Security Insights declaration was found", gemara.Low
+	}
+	return gemara.Failed, "GitHub reports secret scanning and push protection are both disabled", gemara.Medium
 }

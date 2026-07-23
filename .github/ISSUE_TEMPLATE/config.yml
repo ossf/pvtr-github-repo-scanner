@@ -1,0 +1,9 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Join OSSF Slack
+    url: http://slack.openssf.org/
+    about: Join OSSF Slack
+  - name: Ask a question in OSSF Slack gemara channel
+    url: https://openssf.slack.com/archives/C09A9PP765Q
+    about: Ask a question in OSSF Slack gemara channel
