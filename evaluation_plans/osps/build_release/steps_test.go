@@ -2,12 +2,14 @@ package build_release
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/si-tooling/v2/si"
 	"github.com/rhysd/actionlint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
@@ -506,6 +508,493 @@ func TestPullRequestOnlyUnsafeBranchVarsRegex(t *testing.T) {
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.workspace")), "github.workspace should not match")
 }
 
+// --- OSPS-BR-01.03 tests ---
+
+var pwnRequestWorkflow = `name: Unsafe PR target
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run tests
+        run: make test
+`
+
+var pwnRequestHeadRefWorkflow = `name: Unsafe PR target with head ref
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Run tests
+        run: make test
+`
+
+var pwnRequestGithubHeadRefWorkflow = `name: Unsafe PR target with github.head_ref
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Run tests
+        run: make test
+`
+
+var safePRTargetWorkflow = `name: Safe PR target
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v5
+
+      - name: Add label
+        run: echo "Adding label"
+`
+
+var safePullRequestWorkflow = `name: Safe PR workflow
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run tests
+        run: make test
+`
+
+var safePushWorkflow = `name: Safe push workflow
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Deploy
+        run: make deploy
+`
+
+// pull_request_target checking out an explicit safe ref. github.sha resolves to
+// the base branch commit here, so no untrusted code is executed.
+var safePRTargetExplicitRefWorkflow = `name: Safe PR target explicit ref
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Build
+        run: make build
+`
+
+// pull_request_target passing the PR head ref to a non-checkout action. Only
+// actions/checkout is treated as executing the untrusted snapshot, so this
+// must not be flagged.
+var prTargetNonCheckoutHeadRefWorkflow = `name: PR target non-checkout head ref
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on PR
+        uses: some/other-action@v1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+`
+
+// pull_request_target combined with a push trigger. The privileged
+// pull_request_target trigger still makes the head checkout dangerous.
+var prTargetCombinedTriggerWorkflow = `name: PR target combined trigger
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build
+        run: make build
+`
+
+// workflow_run runs in the privileged base context; checking out the head SHA
+// of the (untrusted) triggering run is the classic workflow_run pwn request.
+var workflowRunHeadShaWorkflow = `name: Unsafe workflow_run
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triggering commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Run
+        run: make report
+`
+
+// workflow_run checking out the untrusted head branch (rather than the sha).
+// Exercises the workflow_run.head_branch regex branch through the check.
+var workflowRunHeadBranchWorkflow = `name: Unsafe workflow_run branch
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triggering branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Run
+        run: make report
+`
+
+// issue_comment ChatOps workflow that checks out the PR head via gh in a run
+// step. Runs with the base repo token/secrets, so it is dangerous.
+var issueCommentGhCheckoutWorkflow = `name: Slash command
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        run: gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build
+        run: make build
+`
+
+// issue_comment ChatOps workflow that checks out the PR head via actions/checkout
+// with a raw pull/<n>/head ref instead of gh. Exercises the pull-ref branch
+// through the action path rather than a run step.
+var issueCommentCheckoutPullRefWorkflow = `name: Slash command checkout
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+
+      - name: Build
+        run: make build
+`
+
+// pull_request_target that checks out the PR head via git in a run step rather
+// than actions/checkout. Same threat, different mechanism.
+var prTargetRunStepCheckoutWorkflow = `name: PR target run-step checkout
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and checkout PR head
+        run: |
+          git fetch origin pull/${{ github.event.pull_request.number }}/head
+          git checkout ${{ github.event.pull_request.head.sha }}
+`
+
+// A non-privileged pull_request workflow using gh pr checkout. Fork PRs get a
+// read-only token and no secrets here, so this must not be flagged.
+var pullRequestGhCheckoutWorkflow = `name: PR checkout
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        run: gh pr checkout ${{ github.event.pull_request.number }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+`
+
+// A privileged workflow whose run step performs a benign checkout of the base
+// branch. Must not be flagged.
+var prTargetSafeRunStepWorkflow = `name: PR target safe run step
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v5
+
+      - name: Update main
+        run: git checkout main && make build
+`
+
+func TestCheckWorkflowForUntrustedCodeAccess(t *testing.T) {
+	tests := []struct {
+		name           string
+		workflowFile   string
+		expectedResult bool
+		assertionMsg   string
+	}{
+		{
+			name:           "pull_request_target checking out PR head.sha is flagged",
+			workflowFile:   pwnRequestWorkflow,
+			expectedResult: false,
+			assertionMsg:   "pwn request pattern (head.sha) should be detected",
+		},
+		{
+			name:           "pull_request_target checking out PR head.ref is flagged",
+			workflowFile:   pwnRequestHeadRefWorkflow,
+			expectedResult: false,
+			assertionMsg:   "pwn request pattern (head.ref) should be detected",
+		},
+		{
+			name:           "pull_request_target checking out github.head_ref is flagged",
+			workflowFile:   pwnRequestGithubHeadRefWorkflow,
+			expectedResult: false,
+			assertionMsg:   "pwn request pattern (github.head_ref) should be detected",
+		},
+		{
+			name:           "pull_request_target without PR head checkout is safe",
+			workflowFile:   safePRTargetWorkflow,
+			expectedResult: true,
+			assertionMsg:   "pull_request_target without PR head checkout should pass",
+		},
+		{
+			name:           "pull_request with PR head checkout is safe",
+			workflowFile:   safePullRequestWorkflow,
+			expectedResult: true,
+			assertionMsg:   "pull_request workflows run without elevated privileges",
+		},
+		{
+			name:           "push workflow is safe",
+			workflowFile:   safePushWorkflow,
+			expectedResult: true,
+			assertionMsg:   "push workflows are not affected by this check",
+		},
+		{
+			name:           "pull_request_target checking out an explicit safe ref is safe",
+			workflowFile:   safePRTargetExplicitRefWorkflow,
+			expectedResult: true,
+			assertionMsg:   "explicit github.sha ref points at the base commit and must not be flagged",
+		},
+		{
+			name:           "pull_request_target passing head ref to a non-checkout action is safe",
+			workflowFile:   prTargetNonCheckoutHeadRefWorkflow,
+			expectedResult: true,
+			assertionMsg:   "only actions/checkout executes the untrusted snapshot",
+		},
+		{
+			name:           "pull_request_target combined with push trigger is still flagged",
+			workflowFile:   prTargetCombinedTriggerWorkflow,
+			expectedResult: false,
+			assertionMsg:   "presence of pull_request_target makes the head checkout dangerous",
+		},
+		{
+			name:           "workflow_run checking out the triggering head sha is flagged",
+			workflowFile:   workflowRunHeadShaWorkflow,
+			expectedResult: false,
+			assertionMsg:   "workflow_run head checkout runs untrusted code with secrets",
+		},
+		{
+			name:           "workflow_run checking out the triggering head branch is flagged",
+			workflowFile:   workflowRunHeadBranchWorkflow,
+			expectedResult: false,
+			assertionMsg:   "workflow_run head_branch checkout runs untrusted code with secrets",
+		},
+		{
+			name:           "issue_comment running gh pr checkout is flagged",
+			workflowFile:   issueCommentGhCheckoutWorkflow,
+			expectedResult: false,
+			assertionMsg:   "issue_comment ChatOps checkout runs untrusted code with secrets",
+		},
+		{
+			name:           "issue_comment checking out a pull/<n>/head ref via checkout action is flagged",
+			workflowFile:   issueCommentCheckoutPullRefWorkflow,
+			expectedResult: false,
+			assertionMsg:   "raw pull head ref in the checkout action runs untrusted code with secrets",
+		},
+		{
+			name:           "pull_request_target checking out PR head in a run step is flagged",
+			workflowFile:   prTargetRunStepCheckoutWorkflow,
+			expectedResult: false,
+			assertionMsg:   "run-step git checkout of PR head is equivalent to actions/checkout",
+		},
+		{
+			name:           "non-privileged pull_request using gh pr checkout is safe",
+			workflowFile:   pullRequestGhCheckoutWorkflow,
+			expectedResult: true,
+			assertionMsg:   "fork pull_request runs without secrets or a write token",
+		},
+		{
+			name:           "privileged workflow with a benign base checkout in a run step is safe",
+			workflowFile:   prTargetSafeRunStepWorkflow,
+			expectedResult: true,
+			assertionMsg:   "git checkout main does not reference an untrusted ref",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workflow, parseErrors := actionlint.Parse([]byte(tt.workflowFile))
+			require.Empty(t, parseErrors)
+			require.NotNil(t, workflow)
+			_, violations := checkWorkflowForUntrustedCodeAccess(workflow)
+			t.Log(strings.Join(violations, "\n"))
+			// expectedResult encodes whether the workflow is free of dangerous
+			// untrusted-code checkouts (true = no violations).
+			assert.Equal(t, tt.expectedResult, len(violations) == 0, tt.assertionMsg)
+		})
+	}
+}
+
+func TestClassifyUntrustedCodeIsolation(t *testing.T) {
+	parse := func(src string) *actionlint.Workflow {
+		workflow, parseErrors := actionlint.Parse([]byte(src))
+		require.Empty(t, parseErrors)
+		require.NotNil(t, workflow)
+		return workflow
+	}
+
+	tests := []struct {
+		name         string
+		workflows    []namedWorkflow
+		wantResult   gemara.Result
+		wantContains string
+	}{
+		{
+			name:         "privileged workflow checking out untrusted code fails",
+			workflows:    []namedWorkflow{{name: "pwn.yml", workflow: parse(pwnRequestWorkflow)}},
+			wantResult:   gemara.Failed,
+			wantContains: "expose privileged credentials",
+		},
+		{
+			name:         "privileged workflow with no dangerous checkout needs review",
+			workflows:    []namedWorkflow{{name: "label.yml", workflow: parse(safePRTargetWorkflow)}},
+			wantResult:   gemara.NeedsReview,
+			wantContains: "label.yml",
+		},
+		{
+			name:         "no privileged workflows passes",
+			workflows:    []namedWorkflow{{name: "push.yml", workflow: parse(safePushWorkflow)}},
+			wantResult:   gemara.Passed,
+			wantContains: "No workflows run untrusted code",
+		},
+		{
+			name: "a failing workflow takes precedence over a review-only one",
+			workflows: []namedWorkflow{
+				{name: "safe.yml", workflow: parse(safePRTargetWorkflow)},
+				{name: "pwn.yml", workflow: parse(pwnRequestWorkflow)},
+			},
+			wantResult:   gemara.Failed,
+			wantContains: "expose privileged credentials",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, message := classifyUntrustedCodeIsolation(tt.workflows)
+			t.Log(message)
+			assert.Equal(t, tt.wantResult, result)
+			assert.Contains(t, message, tt.wantContains)
+		})
+	}
+}
+
 // alwaysPasses and alwaysFails stand in for the real per-workflow checks so
 // these cases exercise only how evaluateWorkflows combines their results.
 func alwaysPasses(*actionlint.Workflow) (bool, string) { return true, "" }
@@ -577,6 +1066,60 @@ func TestEvaluateWorkflows(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			result, message, _ := evaluateWorkflows(testCase.workflows, testCase.checkWorkflow, "all workflows passed")
 			assert.Equal(t, testCase.expectedResult, result, message)
+		})
+	}
+}
+
+func TestIsCheckoutAction(t *testing.T) {
+	assert.True(t, isCheckoutAction("actions/checkout@v5"))
+	assert.True(t, isCheckoutAction("Actions/Checkout@v5"), "GitHub action repository names are case insensitive")
+	assert.False(t, isCheckoutAction("actions/checkout"), "an action reference must include a version")
+	assert.False(t, isCheckoutAction("some/other-action@v1"))
+}
+
+func TestUntrustedHeadRefRegex(t *testing.T) {
+	// PR head context (pull_request_target / issue_comment)
+	assert.True(t, untrustedHeadRef.MatchString("github.event.pull_request.head.sha"), "head.sha should match")
+	assert.True(t, untrustedHeadRef.MatchString("github.event.pull_request.head.ref"), "head.ref should match")
+	assert.True(t, untrustedHeadRef.MatchString("github.head_ref"), "github.head_ref should match")
+	// workflow_run head context
+	assert.True(t, untrustedHeadRef.MatchString("github.event.workflow_run.head_sha"), "workflow_run head_sha should match")
+	assert.True(t, untrustedHeadRef.MatchString("github.event.workflow_run.head_branch"), "workflow_run head_branch should match")
+	// raw pull refs (git / API)
+	assert.True(t, untrustedHeadRef.MatchString("refs/pull/123/head"), "refs/pull/<n>/head should match")
+	assert.True(t, untrustedHeadRef.MatchString("pull/123/merge"), "pull/<n>/merge should match")
+	assert.True(t, untrustedHeadRef.MatchString("pull/${{ github.event.issue.number }}/head"), "pull ref with expression should match")
+	// whitespace variations
+	assert.True(t, untrustedHeadRef.MatchString("${{ github.event.pull_request.head.sha }}"), "expression with spaces should match")
+	assert.True(t, untrustedHeadRef.MatchString("${{github.event.pull_request.head.sha}}"), "expression without spaces should match")
+	// safe values
+	assert.False(t, untrustedHeadRef.MatchString("github.workspace"), "github.workspace should not match")
+	assert.False(t, untrustedHeadRef.MatchString("github.ref"), "github.ref should not match")
+	assert.False(t, untrustedHeadRef.MatchString("github.sha"), "github.sha should not match")
+	assert.False(t, untrustedHeadRef.MatchString("github.event.workflow_run.head_repository"), "unrelated workflow_run field should not match")
+	assert.False(t, untrustedHeadRef.MatchString("secrets.TOKEN"), "secrets.TOKEN should not match")
+}
+
+func TestStepChecksOutUntrustedCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		script   string
+		expected bool
+	}{
+		{"gh pr checkout is always untrusted", "gh pr checkout ${{ github.event.issue.number }}", true},
+		{"git checkout of head sha is untrusted", "git checkout ${{ github.event.pull_request.head.sha }}", true},
+		{"git fetch of pull ref is untrusted", "git fetch origin pull/${{ github.event.issue.number }}/head && git checkout FETCH_HEAD", true},
+		{"git switch to head ref is untrusted", "git switch --detach ${{ github.head_ref }}", true},
+		{"line continuation preserves untrusted fetch", "git fetch origin \\\n  pull/${{ github.event.issue.number }}/head", true},
+		{"plain git checkout main is safe", "git checkout main", false},
+		{"git checkout of base sha is safe", "git checkout ${{ github.sha }}", false},
+		{"unrelated build command is safe", "make build && npm test", false},
+		{"head ref echoed without checkout is safe", "echo ${{ github.head_ref }}", false},
+		{"unrelated head ref and safe checkout are not combined", "echo ${{ github.head_ref }}\ngit checkout main", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, stepChecksOutUntrustedCode(tt.script), tt.name)
 		})
 	}
 }
@@ -653,6 +1196,45 @@ func TestReleaseHasUniqueIdentifier(t *testing.T) {
 			assert.Equal(t, tc.expectedResult, result)
 		})
 	}
+}
+
+// TestUntrustedCodeAccessReportsEveryOffendingStep ensures the check does not
+// stop at the first offending checkout: every dangerous head checkout across
+// all jobs must be surfaced so maintainers can fix them in one pass.
+func TestUntrustedCodeAccessReportsEveryOffendingStep(t *testing.T) {
+	multiOffenderWorkflow := `name: Multiple pwn requests
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head again
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+`
+	workflow, parseErrors := actionlint.Parse([]byte(multiOffenderWorkflow))
+	require.Empty(t, parseErrors)
+	require.NotNil(t, workflow)
+	_, violations := checkWorkflowForUntrustedCodeAccess(workflow)
+	message := strings.Join(violations, "\n")
+	t.Log(message)
+	assert.NotEmpty(t, violations, "workflow with multiple head checkouts should be flagged")
+	assert.Contains(t, message, `job "build"`, "diagnostic should identify the first offending job")
+	assert.Contains(t, message, `job "test"`, "diagnostic should identify the second offending job")
+	assert.Contains(t, message, "github.event.pull_request.head.sha", "first offending step should be reported")
+	assert.Contains(t, message, "github.head_ref", "second offending step should be reported")
 }
 
 func TestEnsureLatestReleaseHasChangelog(t *testing.T) {

@@ -49,6 +49,33 @@ var (
 	// skip them for push-triggered workflows and avoid false positives.
 	pullRequestOnlyUnsafeBranchVars = regexp.MustCompile(`.*(github\.ref\b|` +
 		`github\.ref_name).*`)
+
+	// Refs that point at an untrusted code snapshot (a fork's PR head). Checking
+	// any of these out inside a privileged workflow causes untrusted code to run
+	// with the base repository's secrets and write token. Covers the PR head
+	// context (pull_request_target / issue_comment), the workflow_run head
+	// context, and the raw pull/<n>/head|merge refs used with git and the API.
+	untrustedHeadRef = regexp.MustCompile(
+		`github\.event\.pull_request\.head\.sha|` +
+			`github\.event\.pull_request\.head\.ref|` +
+			`github\.head_ref|` +
+			`github\.event\.workflow_run\.head_sha|` +
+			`github\.event\.workflow_run\.head_branch|` +
+			`(?:refs/)?pull/[^/]+/(?:head|merge)`)
+
+	// git commands that materialize code into the workspace. Used together with
+	// untrustedHeadRef so a benign `git checkout main` is not flagged.
+	gitCheckoutCommand = regexp.MustCompile(`(?i)\bgit\s+(?:checkout|switch|fetch)\b`)
+
+	// `gh pr checkout` always fetches and checks out the PR head, so it is
+	// dangerous on its own inside a privileged workflow.
+	ghPrCheckoutCommand = regexp.MustCompile(`(?i)\bgh\s+pr\s+checkout\b`)
+
+	// Shell command separators let the run-step check correlate a checkout
+	// command with the untrusted ref it consumes. Without this, an unrelated
+	// `echo github.head_ref` and `git checkout main` elsewhere in the same script
+	// would be incorrectly combined into a violation.
+	shellCommandSeparator = regexp.MustCompile(`[;\n]|&&|\|\|`)
 )
 
 // checkAllWorkflows fetches the repository's workflow files and evaluates each
@@ -118,6 +145,194 @@ func CicdSanitizedInputParameters(payload data.Payload) (gemara.Result, string, 
 func CicdBranchNameSanitized(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
 	return checkAllWorkflows(payload, checkWorkflowFileForBranchNameUsage,
 		"GitHub Workflows do not use unsanitized branch names in run steps")
+}
+
+// CicdUntrustedCodeIsolation checks OSPS-BR-01.03: CI/CD pipelines that operate
+// on untrusted code snapshots must prevent access to privileged credentials.
+//
+// The requirement is broad and only partly decidable by static analysis, so the
+// result is tiered to ensure a privileged workflow is never silently passed:
+//   - Failed: a privileged workflow checks out an untrusted fork's code (the
+//     "pwn request" pattern), directly exposing base-repo secrets and token.
+//   - NeedsReview: a workflow runs in a privileged context but no dangerous
+//     checkout was detected. The residual vectors (see
+//     checkWorkflowForUntrustedCodeAccess) are not statically decidable, so a
+//     human must confirm the credentials are actually isolated.
+//   - Passed: no workflow runs in a privileged context.
+//   - NotApplicable: the repository has no workflows.
+func CicdUntrustedCodeIsolation(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
+	var confidence gemara.ConfidenceLevel
+
+	workflows, err := payload.GetWorkflowFiles()
+	if len(workflows) == 0 {
+		if err != nil {
+			return gemara.NotApplicable, err.Error(), confidence
+		}
+		return gemara.NotApplicable, "No workflows found in .github/workflows directory", confidence
+	}
+
+	var parsed []namedWorkflow
+	for _, file := range workflows {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
+			continue
+		}
+		if file.Truncated {
+			return gemara.NeedsReview, fmt.Sprintf("Workflow file %v is too large to retrieve for inspection; manual review required", file.Path), confidence
+		}
+		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		if parseErr != nil {
+			return gemara.Failed, fmt.Sprintf("Error parsing workflow: %v (%s)", parseErr, file.Path), confidence
+		}
+		parsed = append(parsed, namedWorkflow{name: file.Name, workflow: workflow})
+	}
+
+	result, message := classifyUntrustedCodeIsolation(parsed)
+	return result, message, confidence
+}
+
+// namedWorkflow pairs a parsed workflow with its filename so aggregate
+// diagnostics can point maintainers at the offending file.
+type namedWorkflow struct {
+	name     string
+	workflow *actionlint.Workflow
+}
+
+// classifyUntrustedCodeIsolation aggregates the per-workflow findings into the
+// tiered OSPS-BR-01.03 verdict documented on CicdUntrustedCodeIsolation. It is
+// separated from workflow decoding so the tiering logic is unit-testable without
+// a payload fixture.
+func classifyUntrustedCodeIsolation(workflows []namedWorkflow) (gemara.Result, string) {
+	var violations []string
+	var privilegedWorkflows []string
+
+	for _, nw := range workflows {
+		privileged, fileViolations := checkWorkflowForUntrustedCodeAccess(nw.workflow)
+		if privileged {
+			privilegedWorkflows = append(privilegedWorkflows, nw.name)
+		}
+		violations = append(violations, fileViolations...)
+	}
+
+	if len(violations) > 0 {
+		return gemara.Failed,
+			"CI/CD pipelines expose privileged credentials to untrusted code: " + strings.Join(violations, "; ")
+	}
+
+	if len(privilegedWorkflows) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf(
+			"No untrusted-code checkout was detected, but these workflows run in a privileged context "+
+				"(%s); static analysis cannot rule out credential exposure via artifact or cache poisoning, "+
+				"self-hosted runners, or untrusted build steps. Manual review required.",
+			strings.Join(privilegedWorkflows, ", "))
+	}
+
+	return gemara.Passed, "No workflows run untrusted code in a privileged context"
+}
+
+// privilegedUntrustedTriggers are workflow events that may execute with access
+// to base-repository credentials and can be initiated by an untrusted actor (a
+// fork's pull request, a completed workflow, or a comment). Running an untrusted
+// code snapshot in these contexts can expose privileged credentials or assets.
+var privilegedUntrustedTriggers = map[string]bool{
+	"pull_request_target": true,
+	"workflow_run":        true,
+	"issue_comment":       true,
+}
+
+// checkWorkflowForUntrustedCodeAccess reports whether a workflow runs in a
+// privileged context and lists every dangerous untrusted-code checkout it
+// contains. It detects the "pwn request" family of anti-patterns: a privileged
+// workflow (see privilegedUntrustedTriggers) that checks out an untrusted fork's
+// code, giving that code access to the base repository's secrets and write
+// token, via actions/checkout of an untrusted head ref or an equivalent run:
+// step (git checkout/fetch of a PR head, or gh pr checkout).
+//
+// A privileged workflow with no returned violations is not proven safe: the
+// vectors below are not statically decidable and are surfaced by the caller's
+// NeedsReview tier rather than passed silently:
+//   - workflow_run artifact/cache poisoning (privileged workflow downloading and
+//     then executing/trusting artifacts produced by the untrusted run). This is
+//     a contextual dataflow judgment, a candidate for an AI-assisted escalation
+//     layer built on the sdkai seam once #346 merges.
+//   - untrusted fork execution on self-hosted runners. This depends on runner
+//     group / fork-secret settings that are not present in the workflow file, so
+//     it needs an API-backed data source rather than static analysis or AI.
+func checkWorkflowForUntrustedCodeAccess(workflow *actionlint.Workflow) (privileged bool, violations []string) {
+	var triggers []string
+	for _, event := range workflow.On {
+		if privilegedUntrustedTriggers[event.EventName()] {
+			triggers = append(triggers, event.EventName())
+		}
+	}
+	if len(triggers) == 0 {
+		return false, nil
+	}
+	trigger := strings.Join(triggers, ", ")
+
+	for _, job := range workflow.Jobs {
+		if job == nil {
+			continue
+		}
+		jobID := "unknown"
+		if job.ID != nil && job.ID.Value != "" {
+			jobID = job.ID.Value
+		}
+		for _, step := range job.Steps {
+			if step == nil {
+				continue
+			}
+			switch exec := step.Exec.(type) {
+			case *actionlint.ExecAction:
+				if exec.Uses == nil || !isCheckoutAction(exec.Uses.Value) {
+					continue
+				}
+				refInput, ok := exec.Inputs["ref"]
+				if !ok || refInput == nil || refInput.Value == nil {
+					continue
+				}
+				if untrustedHeadRef.MatchString(refInput.Value.Value) {
+					violations = append(violations, fmt.Sprintf(
+						"%s workflow job %q checks out untrusted code (%s) in a privileged context",
+						trigger, jobID, strings.TrimSpace(refInput.Value.Value)))
+				}
+			case *actionlint.ExecRun:
+				if exec.Run == nil {
+					continue
+				}
+				if stepChecksOutUntrustedCode(exec.Run.Value) {
+					violations = append(violations, fmt.Sprintf(
+						"%s workflow job %q checks out untrusted code in a run step in a privileged context",
+						trigger, jobID))
+				}
+			}
+		}
+	}
+
+	return true, violations
+}
+
+func isCheckoutAction(uses string) bool {
+	action, _, found := strings.Cut(uses, "@")
+	return found && strings.EqualFold(action, "actions/checkout")
+}
+
+// stepChecksOutUntrustedCode reports whether a run: script materializes an
+// untrusted PR head into the workspace. `gh pr checkout` always targets the PR
+// head, so it is flagged unconditionally; git checkout/fetch/switch is flagged
+// only when it also references an untrusted head ref, so a benign
+// `git checkout main` is not a false positive.
+func stepChecksOutUntrustedCode(script string) bool {
+	// Preserve line continuations before splitting the script into commands.
+	script = strings.ReplaceAll(script, "\\\n", " ")
+	for _, command := range shellCommandSeparator.Split(script, -1) {
+		if ghPrCheckoutCommand.MatchString(command) {
+			return true
+		}
+		if gitCheckoutCommand.MatchString(command) && untrustedHeadRef.MatchString(command) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkWorkflowFileForBranchNameUsage checks a workflow for unsanitized branch name

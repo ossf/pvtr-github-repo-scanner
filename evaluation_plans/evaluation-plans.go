@@ -42,6 +42,9 @@ var (
 		"OSPS-BR-01.02": {
 			build_release.CicdBranchNameSanitized,
 		},
+		"OSPS-BR-01.03": {
+			build_release.CicdUntrustedCodeIsolation,
+		},
 		"OSPS-BR-02.01": {
 			build_release.ReleaseHasUniqueIdentifier,
 		},
