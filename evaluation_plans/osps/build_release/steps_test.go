@@ -506,6 +506,42 @@ func TestPullRequestOnlyUnsafeBranchVarsRegex(t *testing.T) {
 	assert.False(t, pullRequestOnlyUnsafeBranchVars.Match([]byte("github.workspace")), "github.workspace should not match")
 }
 
+func TestDependenciesUseStandardizedTooling(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     data.Payload
+		wantResult  gemara.Result
+		wantMessage string
+	}{
+		{
+			name:        "Single dependency manifest detected",
+			payload:     data.Payload{DependencyManifestsCount: 1},
+			wantResult:  gemara.Passed,
+			wantMessage: "Found 1 dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling",
+		},
+		{
+			name:        "Multiple dependency manifests detected",
+			payload:     data.Payload{DependencyManifestsCount: 3},
+			wantResult:  gemara.Passed,
+			wantMessage: "Found 3 dependency manifest(s) in the GitHub dependency graph, indicating dependencies are ingested via standardized tooling",
+		},
+		{
+			name:        "No dependency manifests detected",
+			payload:     data.Payload{DependencyManifestsCount: 0},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: "No dependency manifests found in the GitHub dependency graph. Review the project to confirm that any dependencies ingested by the build and release pipeline use standardized tooling.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMessage, _ := DependenciesUseStandardizedTooling(tt.payload)
+			assert.Equal(t, tt.wantResult, gotResult)
+			assert.Equal(t, tt.wantMessage, gotMessage)
+		})
+	}
+}
+
 // alwaysPasses and alwaysFails stand in for the real per-workflow checks so
 // these cases exercise only how evaluateWorkflows combines their results.
 func alwaysPasses(*actionlint.Workflow) (bool, string) { return true, "" }

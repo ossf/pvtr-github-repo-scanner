@@ -58,7 +58,7 @@ var (
 			build_release.EnsureLatestReleaseHasChangelog,
 		},
 		"OSPS-BR-05.01": {
-			reusable_steps.NotImplemented,
+			build_release.DependenciesUseStandardizedTooling,
 		},
 		"OSPS-BR-06.01": {
 			reusable_steps.HasSecurityInsightsFile,
