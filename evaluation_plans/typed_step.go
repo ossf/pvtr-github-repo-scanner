@@ -1,28 +1,21 @@
 package evaluation_plans
 
 import (
-	"fmt"
-
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 )
 
 // TypedStep is the signature every step in this plugin uses: it receives a
-// fully-typed data.Payload instead of an untyped any. AsAssessmentStep adapts
-// it to gemara.AssessmentStep so the SDK can invoke it; the type assertion
-// replaces the per-step VerifyPayload guard that used to live in every step.
+// fully-typed data.Payload instead of an untyped any. The SDK adapts it to
+// gemara.AssessmentStep at registration time (see
+// pluginkit.AddEvaluationSuiteTypedForAllCatalogs in main.go), performing the
+// payload type assertion that used to live in a per-step VerifyPayload guard.
+//
+// Registration must go through the SDK's typed helper rather than a local
+// adapter: adapting here would capture every step into one closure literal,
+// collapsing all steps to a single symbol and erasing their names from the
+// benchmark report and evaluation log.
 type TypedStep func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel)
-
-func (s TypedStep) AsAssessmentStep() gemara.AssessmentStep {
-	return func(p any) (gemara.Result, string, gemara.ConfidenceLevel) {
-		payload, ok := p.(data.Payload)
-		if !ok {
-			return gemara.Unknown,
-				fmt.Sprintf("expected %T, got %T", data.Payload{}, p), 0
-		}
-		return s(payload)
-	}
-}
 
 // AllSteps merges all step maps into a single map for registration with the SDK.
 // Assessment IDs are unique across catalogs (e.g., OSPS-* vs CRA-*), so the
@@ -34,16 +27,15 @@ func (s TypedStep) AsAssessmentStep() gemara.AssessmentStep {
 // guarantees that substantive changes to a control result in a new identifier.
 // This means implementations for a given assessment ID will not diverge between
 // versions, so all versions can share the same step function for the same key.
-func AllSteps() map[string][]gemara.AssessmentStep {
-	merged := make(map[string][]gemara.AssessmentStep, len(OSPS))
+//
+// Every family merged here must consume data.Payload; a family taking a
+// different payload type needs its own registration call.
+func AllSteps() map[string][]TypedStep {
+	merged := make(map[string][]TypedStep, len(OSPS))
 	for id, steps := range OSPS {
-		for _, s := range steps {
-			merged[id] = append(merged[id], s.AsAssessmentStep())
-		}
+		merged[id] = append(merged[id], steps...)
 	}
 	// Add additional catalog step maps here, e.g.:
-	// for id, steps := range CRA {
-	//     for _, s := range steps { merged[id] = append(merged[id], s.AsAssessmentStep()) }
-	// }
+	// for id, steps := range CRA { merged[id] = append(merged[id], steps...) }
 	return merged
 }

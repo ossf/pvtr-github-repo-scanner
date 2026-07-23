@@ -8,6 +8,166 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestHasBranchRules(t *testing.T) {
+	testCases := []struct {
+		name     string
+		rules    *github.BranchRules
+		expected bool
+	}{
+		{
+			name:     "no rules fetched",
+			rules:    nil,
+			expected: false,
+		},
+		{
+			name:     "rules fetched but empty",
+			rules:    &github.BranchRules{},
+			expected: false,
+		},
+		{
+			name: "a non-status-check rule is present",
+			rules: &github.BranchRules{
+				Deletion: []*github.BranchRuleMetadata{{RulesetID: 1}},
+			},
+			expected: true,
+		},
+		{
+			name: "a status check rule is present",
+			rules: &github.BranchRules{
+				RequiredStatusChecks: []*github.RequiredStatusChecksBranchRule{{}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			metadata := &GitHubRepositoryMetadata{defaultBranchRules: testCase.rules}
+			assert.Equal(t, testCase.expected, metadata.HasBranchRules())
+		})
+	}
+}
+
+func TestRequiredStatusCheckContexts(t *testing.T) {
+	testCases := []struct {
+		name     string
+		rules    *github.BranchRules
+		expected []string
+	}{
+		{
+			name:     "no rules fetched",
+			rules:    nil,
+			expected: nil,
+		},
+		{
+			name: "ruleset exists but requires no status checks",
+			rules: &github.BranchRules{
+				Deletion: []*github.BranchRuleMetadata{{RulesetID: 1}},
+			},
+			expected: nil,
+		},
+		{
+			name: "contexts collected across multiple rules",
+			rules: &github.BranchRules{
+				RequiredStatusChecks: []*github.RequiredStatusChecksBranchRule{
+					{
+						Parameters: github.RequiredStatusChecksRuleParameters{
+							RequiredStatusChecks: []*github.RuleStatusCheck{
+								{Context: "build"},
+								{Context: "lint"},
+							},
+						},
+					},
+					{
+						Parameters: github.RequiredStatusChecksRuleParameters{
+							RequiredStatusChecks: []*github.RuleStatusCheck{
+								{Context: "test"},
+							},
+						},
+					},
+				},
+			},
+			expected: []string{"build", "lint", "test"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			metadata := &GitHubRepositoryMetadata{defaultBranchRules: testCase.rules}
+			assert.Equal(t, testCase.expected, metadata.RequiredStatusCheckContexts())
+		})
+	}
+}
+
+func TestRulesetsObserved(t *testing.T) {
+	testCases := []struct {
+		name     string
+		rules    *github.BranchRules
+		expected bool
+	}{
+		{
+			name:     "ruleset fetch failed",
+			rules:    nil,
+			expected: false,
+		},
+		{
+			name:     "rulesets fetched, none configured",
+			rules:    &github.BranchRules{},
+			expected: true,
+		},
+		{
+			name: "rulesets fetched and configured",
+			rules: &github.BranchRules{
+				Deletion: []*github.BranchRuleMetadata{{RulesetID: 1}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			metadata := &GitHubRepositoryMetadata{defaultBranchRules: testCase.rules}
+			assert.Equal(t, testCase.expected, metadata.RulesetsObserved())
+		})
+	}
+}
+
+func TestViewerCanAdminister(t *testing.T) {
+	testCases := []struct {
+		name     string
+		ghRepo   *github.Repository
+		expected bool
+	}{
+		{
+			name:     "no repository loaded",
+			ghRepo:   nil,
+			expected: false,
+		},
+		{
+			name:     "no permissions reported",
+			ghRepo:   &github.Repository{},
+			expected: false,
+		},
+		{
+			name:     "non-admin permissions",
+			ghRepo:   &github.Repository{Permissions: map[string]bool{"pull": true, "push": true, "admin": false}},
+			expected: false,
+		},
+		{
+			name:     "admin permissions",
+			ghRepo:   &github.Repository{Permissions: map[string]bool{"admin": true}},
+			expected: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			metadata := &GitHubRepositoryMetadata{ghRepo: testCase.ghRepo}
+			assert.Equal(t, testCase.expected, metadata.ViewerCanAdminister())
+		})
+	}
+}
+
 func TestLoadRepositoryMetadata(t *testing.T) {
 	testCases := []struct {
 		name              string

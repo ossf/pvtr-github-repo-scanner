@@ -30,14 +30,6 @@ func HasSecurityInsightsFile(payload data.Payload) (result gemara.Result, messag
 	return gemara.Passed, "Security insights file found", confidence
 }
 
-func HasMadeReleases(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if len(payload.Releases) == 0 {
-		return gemara.NotApplicable, "No releases found", confidence
-	}
-
-	return gemara.Passed, fmt.Sprintf("Found %v releases", len(payload.Releases)), confidence
-}
-
 func IsActive(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.Insights.Repository.Status == "active" {
 		result = gemara.Passed
