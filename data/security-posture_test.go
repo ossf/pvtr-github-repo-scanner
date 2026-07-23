@@ -153,3 +153,62 @@ func TestInsightsClaimsSecretsTooling(t *testing.T) {
 	insights.Repository.SecurityPosture.Tools = nil
 	assert.False(t, insightsClaimsSecretsTooling(insights))
 }
+
+func TestDefinesSecretsHandlingPolicy(t *testing.T) {
+	testCases := []struct {
+		name     string
+		content  string
+		expected bool
+	}{
+		{
+			name:     "empty policy",
+			content:  "",
+			expected: false,
+		},
+		{
+			name:     "secrets mentioned without management guidance",
+			content:  "We enable GitHub secret scanning on this repository.",
+			expected: false,
+		},
+		{
+			name:     "management indicator without secrets term",
+			content:  "Access is granted through our key management process.",
+			expected: false,
+		},
+		{
+			name:     "credentials with rotation guidance",
+			content:  "All credentials must be rotated every 90 days.",
+			expected: true,
+		},
+		{
+			name:     "secrets stored in a vault",
+			content:  "Project secrets are stored in HashiCorp Vault.",
+			expected: true,
+		},
+		{
+			name:     "explicit secret management policy",
+			content:  "This document describes our secret management policy.",
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rd := RestData{SecurityPolicy: SecurityPolicy{Content: tc.content}}
+			assert.Equal(t, tc.expected, definesSecretsHandlingPolicy(rd))
+		})
+	}
+}
+
+func TestBuildSecurityPosture_DefinesSecretsPolicyFromSecurityMd(t *testing.T) {
+	repo := &github.Repository{}
+	rd := RestData{
+		SecurityPolicy: SecurityPolicy{
+			Present: true,
+			Content: "Credentials are stored in a vault and rotated regularly.",
+		},
+	}
+	sp, err := buildSecurityPosture(repo, rd)
+	assert.NoError(t, err)
+	assert.True(t, sp.DefinesPolicyForHandlingSecrets())
+}

@@ -140,11 +140,12 @@ type mockSecurityPosture struct {
 	scans            bool
 	observable       bool
 	insightsDeclares bool
+	definesPolicy    bool
 }
 
 func (m mockSecurityPosture) PreventsPushingSecrets() bool          { return m.preventsPush }
 func (m mockSecurityPosture) ScansForSecrets() bool                 { return m.scans }
-func (m mockSecurityPosture) DefinesPolicyForHandlingSecrets() bool { return false }
+func (m mockSecurityPosture) DefinesPolicyForHandlingSecrets() bool { return m.definesPolicy }
 func (m mockSecurityPosture) SecretScanningObservable() bool        { return m.observable }
 func (m mockSecurityPosture) InsightsDeclaresSecretScanning() bool  { return m.insightsDeclares }
 
@@ -199,6 +200,38 @@ func TestSecretScanningInUse(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result, message, _ := SecretScanningInUse(data.Payload{SecurityPosture: tc.posture})
+			assert.Equal(t, tc.expectedResult, result)
+			assert.Contains(t, message, tc.expectedMessage)
+		})
+	}
+}
+
+func TestSecretsManagementPolicy(t *testing.T) {
+	testCases := []struct {
+		name            string
+		posture         mockSecurityPosture
+		expectedResult  gemara.Result
+		expectedMessage string
+	}{
+		{
+			name:            "documented policy passes",
+			posture:         mockSecurityPosture{definesPolicy: true},
+			expectedResult:  gemara.Passed,
+			expectedMessage: "A documented policy for managing secrets and credentials was found",
+		},
+		{
+			// No observable policy: it may live in docs we cannot read, so this is
+			// unconfirmed rather than a violation.
+			name:            "no observable policy needs review",
+			posture:         mockSecurityPosture{definesPolicy: false},
+			expectedResult:  gemara.NeedsReview,
+			expectedMessage: "manual review is required",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, message, _ := SecretsManagementPolicy(data.Payload{SecurityPosture: tc.posture})
 			assert.Equal(t, tc.expectedResult, result)
 			assert.Contains(t, message, tc.expectedMessage)
 		})
