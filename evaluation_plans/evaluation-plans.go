@@ -68,7 +68,7 @@ var (
 			build_release.SecretScanningInUse,
 		},
 		"OSPS-BR-07.02": {
-			reusable_steps.NotImplemented,
+			build_release.SecretsManagementPolicy,
 		},
 		"OSPS-DO-01.01": {
 			reusable_steps.HasSecurityInsightsFile,

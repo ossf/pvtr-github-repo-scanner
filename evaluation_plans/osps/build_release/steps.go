@@ -654,3 +654,15 @@ func SecretScanningInUse(payload data.Payload) (result gemara.Result, message st
 	}
 	return gemara.Failed, "GitHub reports secret scanning and push protection are both disabled", gemara.Medium
 }
+
+func SecretsManagementPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// A documented secrets-management policy is observable only when the project
+	// publishes it somewhere we can read — today that is the SECURITY.md file.
+	if payload.SecurityPosture.DefinesPolicyForHandlingSecrets() {
+		return gemara.Passed, "A documented policy for managing secrets and credentials was found in the repository's security policy", gemara.Medium
+	}
+
+	// The policy may still live in documentation we cannot observe (an external
+	// wiki, handbook, etc.), so this is unconfirmed rather than a violation.
+	return gemara.NeedsReview, "No documented policy for managing secrets and credentials was found in the repository's security policy; manual review is required to confirm one exists elsewhere", gemara.Low
+}
