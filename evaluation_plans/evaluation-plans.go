@@ -34,7 +34,7 @@ var (
 			access_control.WorkflowDefaultReadPermissions,
 		},
 		"OSPS-AC-04.02": {
-			reusable_steps.NotImplemented,
+			access_control.WorkflowJobPermissionsLeastPrivilege,
 		},
 		"OSPS-BR-01.01": {
 			build_release.CicdSanitizedInputParameters,

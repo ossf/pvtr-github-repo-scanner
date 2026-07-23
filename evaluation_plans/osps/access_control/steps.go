@@ -2,6 +2,7 @@ package access_control
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gemaraproj/go-gemara"
@@ -215,4 +216,206 @@ func summarizeFileList(files []string) string {
 		return strings.Join(files, ", ")
 	}
 	return fmt.Sprintf("%s, and %d more", strings.Join(files[:max], ", "), len(files)-max)
+}
+
+// WorkflowJobPermissionsLeastPrivilege implements OSPS-AC-04.02: when a job is
+// assigned permissions in a CI/CD pipeline, the source code or configuration
+// must only assign the minimum privileges necessary for the corresponding
+// activity.
+//
+// It inspects the workflow-level and job-level `permissions:` blocks of every
+// GitHub Actions workflow. A `write-all` grant gives the job's GITHUB_TOKEN
+// write access to every scope regardless of its activity, so it unambiguously
+// fails. Empty permission blocks and scopes explicitly set to `none` pass.
+// Other grants need manual review because whether they are necessary depends on
+// what the corresponding job does.
+func WorkflowJobPermissionsLeastPrivilege(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
+	workflows, err := payload.GetWorkflowFiles()
+	if err != nil {
+		return gemara.NeedsReview, fmt.Sprintf("Workflow files could not be retrieved; manual review required: %v", err), gemara.Low
+	}
+	return evaluateWorkflowJobPermissions(workflows)
+}
+
+// evaluateWorkflowJobPermissions evaluates decoded workflow files. Unreadable
+// files require manual review but do not stop other files from being checked;
+// an observed violation therefore cannot be hidden by a malformed sibling.
+func evaluateWorkflowJobPermissions(workflows []data.WorkflowFile) (gemara.Result, string, gemara.ConfidenceLevel) {
+	var violations []string
+	var reviewRequired []string
+	var uninspected []string
+	permissionsAssigned := false
+	workflowCount := 0
+
+	for _, file := range workflows {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
+			continue
+		}
+		workflowCount++
+
+		if file.Truncated {
+			uninspected = append(uninspected, file.Path+" (too large to retrieve)")
+			continue
+		}
+
+		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		if parseErr != nil || workflow == nil {
+			uninspected = append(uninspected, fmt.Sprintf("%s (could not be parsed)", file.Path))
+			continue
+		}
+
+		fileResult, findings := checkWorkflowJobPermissions(file.Path, workflow)
+		if fileResult != gemara.NotApplicable {
+			permissionsAssigned = true
+		}
+		switch fileResult {
+		case gemara.Failed:
+			violations = append(violations, findings...)
+		case gemara.NeedsReview:
+			reviewRequired = append(reviewRequired, findings...)
+		}
+	}
+
+	if workflowCount == 0 {
+		return gemara.NotApplicable, "No workflows found in .github/workflows directory", gemara.Undetermined
+	}
+
+	sort.Strings(violations)
+	sort.Strings(reviewRequired)
+	sort.Strings(uninspected)
+
+	if len(violations) > 0 {
+		return gemara.Failed,
+			"CI/CD jobs assign more than the minimum privileges: " + strings.Join(violations, "; "),
+			gemara.High
+	}
+
+	if len(uninspected) > 0 {
+		return gemara.NeedsReview, fmt.Sprintf(
+			"Unable to evaluate %d of %d workflow files; manual review required: %s",
+			len(uninspected), workflowCount, summarizeFileList(uninspected)), gemara.Low
+	}
+
+	if !permissionsAssigned {
+		return gemara.NotApplicable, "No CI/CD jobs explicitly assign permissions", gemara.Undetermined
+	}
+
+	if len(reviewRequired) > 0 {
+		return gemara.NeedsReview,
+			"CI/CD job permissions require review to confirm they are necessary: " + strings.Join(reviewRequired, "; "),
+			gemara.Low
+	}
+
+	return gemara.Passed,
+		"All assigned CI/CD job permissions grant no access",
+		gemara.High
+}
+
+// maximumPermissionScopes mirrors the permission scopes supported by the
+// pinned actionlint version. Models has no write level, so read is its maximum.
+var maximumPermissionScopes = map[string]string{
+	"actions":             "write",
+	"artifact-metadata":   "write",
+	"attestations":        "write",
+	"checks":              "write",
+	"contents":            "write",
+	"deployments":         "write",
+	"discussions":         "write",
+	"id-token":            "write",
+	"issues":              "write",
+	"models":              "read",
+	"packages":            "write",
+	"pages":               "write",
+	"pull-requests":       "write",
+	"repository-projects": "write",
+	"security-events":     "write",
+	"statuses":            "write",
+}
+
+func permissionsGrantMaximumAccess(perms *actionlint.Permissions) bool {
+	if perms == nil || len(perms.Scopes) != len(maximumPermissionScopes) {
+		return false
+	}
+	for scope, maximum := range maximumPermissionScopes {
+		permission, ok := perms.Scopes[scope]
+		if !ok || permission == nil || permission.Value == nil || !strings.EqualFold(permission.Value.Value, maximum) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkWorkflowJobPermissions inspects the workflow-level and job-level
+// `permissions:` blocks of a single parsed workflow. It fails on write-all,
+// requests review for grants whose necessity depends on the job, passes
+// explicit no-access configurations, and returns not applicable when no
+// permissions were assigned. The workflow filename is included in findings to
+// make them actionable.
+func checkWorkflowJobPermissions(name string, workflow *actionlint.Workflow) (gemara.Result, []string) {
+	assigned := false
+	var violations []string
+	var reviewRequired []string
+
+	check := func(perms *actionlint.Permissions, label string) {
+		if perms == nil {
+			return
+		}
+		assigned = true
+		if perms.All != nil {
+			if strings.EqualFold(perms.All.Value, "write-all") {
+				violations = append(violations, label+" grant write-all")
+			} else {
+				reviewRequired = append(reviewRequired, fmt.Sprintf("%s grant %s", label, perms.All.Value))
+			}
+			return
+		}
+		if permissionsGrantMaximumAccess(perms) {
+			violations = append(violations, label+" grant maximum access to every scope")
+			return
+		}
+
+		for scope, permission := range perms.Scopes {
+			if permission.Value != nil && !strings.EqualFold(permission.Value.Value, "none") {
+				reviewRequired = append(reviewRequired,
+					fmt.Sprintf("%s grant %s: %s", label, scope, permission.Value.Value))
+			}
+		}
+	}
+
+	// A job-level block replaces, rather than merges with, the workflow-level
+	// block. Check the workflow-level grant only when at least one job inherits it.
+	workflowPermissionsApply := false
+	for _, job := range workflow.Jobs {
+		if job != nil && job.Permissions == nil {
+			workflowPermissionsApply = true
+			break
+		}
+	}
+	if workflowPermissionsApply {
+		check(workflow.Permissions, fmt.Sprintf("%s: workflow-level permissions", name))
+	}
+
+	for _, job := range workflow.Jobs {
+		if job == nil {
+			continue
+		}
+		jobID := ""
+		if job.ID != nil {
+			jobID = job.ID.Value
+		}
+		check(job.Permissions, fmt.Sprintf("%s (job %q): permissions", name, jobID))
+	}
+
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		return gemara.Failed, violations
+	}
+	if len(reviewRequired) > 0 {
+		sort.Strings(reviewRequired)
+		return gemara.NeedsReview, reviewRequired
+	}
+	if assigned {
+		return gemara.Passed, nil
+	}
+	return gemara.NotApplicable, nil
 }
