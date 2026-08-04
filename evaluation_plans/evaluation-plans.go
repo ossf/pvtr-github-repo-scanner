@@ -218,13 +218,16 @@ var (
 			vuln_management.HasVexDocument,
 		},
 		"OSPS-VM-05.01": {
-			reusable_steps.NotImplemented,
+			reusable_steps.IsActive,
+			vuln_management.HasSCARemediationThresholdPolicy,
 		},
 		"OSPS-VM-05.03": {
-			reusable_steps.NotImplemented,
+			reusable_steps.IsActive,
+			vuln_management.EnforcesSCAOnChanges,
 		},
 		"OSPS-VM-05.02": {
-			reusable_steps.NotImplemented,
+			reusable_steps.IsActive,
+			vuln_management.HasSCAReleasePolicy,
 		},
 		"OSPS-VM-06.01": {
 			reusable_steps.HasDependencyManagementPolicy,

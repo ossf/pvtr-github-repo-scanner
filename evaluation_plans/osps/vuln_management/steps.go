@@ -1,6 +1,7 @@
 package vuln_management
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -758,4 +759,963 @@ func HasVexDocument(payload data.Payload) (result gemara.Result, message string,
 	}
 
 	return gemara.NeedsReview, "No VEX document was found in the repository; confirm manually whether non-affecting vulnerabilities are accounted for in a VEX document", gemara.Low
+}
+
+var (
+	scaAcronymPattern             = regexp.MustCompile(`(?:^|[^0-9a-z])sca(?:[^0-9a-z]|$)`)
+	policyNegationPattern         = regexp.MustCompile(`\b(?:do(?:es)? not|not required|need not|no requirement|optional|informational only)\b`)
+	policyObligationPattern       = regexp.MustCompile(`\b(?:must|shall|required|requires|will block|is blocked|are blocked)\b`)
+	vulnerabilityPattern          = regexp.MustCompile(`\bvulnerabilit(?:y|ies)\b`)
+	licensePattern                = regexp.MustCompile(`\blicen[cs](?:e|es|ing)\b`)
+	vulnerabilityThresholdPattern = regexp.MustCompile(`(?:\b(?:critical|high|medium|moderate|low)\b|\bcvss\b\s*(?:score\s*)?(?:>=|>|at least)\s*[0-9]+(?:\.[0-9]+)?|\bwithin\s+[0-9]+\s+(?:hour|day|week|month)s?\b)`)
+	licenseThresholdPattern       = regexp.MustCompile(`\b(?:denied|disallowed|forbidden|prohibited|incompatible|unapproved|allowlisted|approved)\b`)
+	remediationPattern            = regexp.MustCompile(`\b(?:address(?:ed)?|remediat(?:e|ed)|resolv(?:e|ed)|fix(?:ed)?|remove(?:d)?|replace(?:d)?|reject(?:ed)?|block(?:ed)?)\b`)
+	preReleasePattern             = regexp.MustCompile(`\b(?:before|prior to)\s+(?:any\s+|each\s+|a\s+)?(?:release|publication|publishing|deployment)\b`)
+	releaseBlockedPattern         = regexp.MustCompile(`\b(?:release|publication|publishing|deployment)\b.{0,80}\b(?:block(?:ed)?|prevent(?:ed)?|prohibit(?:ed)?|not permitted)\b|\bblock(?:ed)?\b.{0,80}\buntil\b.{0,80}\b(?:address(?:ed)?|remediat(?:ed)?|resolv(?:ed)?|fix(?:ed)?)\b`)
+	allChangesPattern             = regexp.MustCompile(`\b(?:all|every)\s+(?:code\s+)?changes?\b|\bpull requests?\b|\bbefore merg(?:e|ing)\b`)
+	knownVulnerabilityPattern     = regexp.MustCompile(`\bknown vulnerabilit(?:y|ies)\b`)
+	maliciousDependencyPattern    = regexp.MustCompile(`\bmalicious\b.{0,40}\b(?:dependencies|dependency|packages?|components?)\b|\b(?:dependencies|dependency|packages?|components?)\b.{0,40}\bmalicious\b`)
+	mergeBlockingPattern          = regexp.MustCompile(`\b(?:block|reject|prevent|prohibit)(?:s|ed|ing)?\b.{0,80}\b(?:merg(?:e|ing)|change|pull request|violation)\b|\b(?:merg(?:e|ing)|change|pull request|violation)\b.{0,80}\b(?:block|reject|prevent|prohibit)(?:s|ed|ing)?\b|\bmust pass\b`)
+	nonExploitablePattern         = regexp.MustCompile(`\b(?:non[- ]exploitable|not exploitable|not affected)\b`)
+	exceptionPattern              = regexp.MustCompile(`\b(?:declar(?:e|ed)|suppress(?:ed|ion)?|waiv(?:e|ed|er)|exception|justif(?:y|ied|ication))\b`)
+	scopeNegationPattern          = regexp.MustCompile(`\b(?:not all|not every|only some|only selected)\s+(?:code\s+)?changes?\b`)
+	sentenceSplitPattern          = regexp.MustCompile(`[.!?;]+(?:\s+|$)`)
+	htmlCommentPattern            = regexp.MustCompile(`(?s)<!--.*?-->`)
+)
+
+var scaToolKeywords = []string{"software composition", "dependency scanning", "dependency analysis", "composition analysis"}
+
+type scaIdentifier struct {
+	needle                string
+	id                    string
+	coversVulnerabilities bool
+	coversMalicious       bool
+}
+
+// License-only products are deliberately absent. In particular, Licensee and
+// FOSSA evidence cannot establish evaluation for vulnerabilities or malicious
+// dependencies.
+var scaActionIdentifiers = []scaIdentifier{
+	{"actions/dependency-review-action", "dependency-review", true, true},
+	{"google/osv-scanner-action/osv-scanner-action", "osv-scanner", true, false},
+	{"aquasecurity/trivy-action", "trivy", true, false},
+	{"anchore/scan-action", "grype", true, false},
+	{"snyk/actions/node", "snyk", true, false},
+	{"snyk/actions/python", "snyk", true, false},
+	{"snyk/actions/golang", "snyk", true, false},
+	{"dependency-check/dependency-check-action", "dependency-check", true, false},
+}
+
+var scaCommandIdentifiers = []scaIdentifier{
+	{"osv-scanner", "osv-scanner", true, false},
+	{"trivy", "trivy", true, false},
+	{"grype", "grype", true, false},
+	{"snyk", "snyk", true, false},
+	{"dependency-check", "dependency-check", true, false},
+	{"pip-audit", "pip-audit", true, false},
+	{"govulncheck", "govulncheck", true, false},
+	{"nancy", "nancy", true, false},
+	{"cargo audit", "cargo-audit", true, false},
+	{"npm audit", "npm-audit", true, false},
+}
+
+type scaSource struct {
+	name                  string
+	toolID                string
+	workflowContext       bool
+	policyDocumented      bool
+	exceptionDocumented   bool
+	coversVulnerabilities bool
+	coversMalicious       bool
+}
+
+type scaDetection struct {
+	sources             []scaSource
+	inspectionBlocked   bool
+	coverageProven      bool
+	scannerSignal       bool
+	nonBlockingObserved bool
+}
+
+type scaRepositoryPolicy struct {
+	documented          bool
+	exceptionDocumented bool
+	path                string
+}
+
+func looksLikeSCA(value string) bool {
+	value = strings.ToLower(value)
+	if scaAcronymPattern.MatchString(value) {
+		return true
+	}
+	for _, keyword := range scaToolKeywords {
+		if strings.Contains(value, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLicenseOnlyTool(value string) bool {
+	value = strings.ToLower(value)
+	return strings.Contains(value, "licensee") || strings.Contains(value, "fossa") ||
+		strings.Contains(value, "license-only") || strings.Contains(value, "license only")
+}
+
+func matchSCAAction(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if isLicenseOnlyTool(value) {
+		return ""
+	}
+	if at := strings.Index(value, "@"); at >= 0 {
+		value = value[:at]
+	}
+	for _, candidate := range scaActionIdentifiers {
+		if value == candidate.needle {
+			return candidate.id
+		}
+	}
+	return ""
+}
+
+func validSCACommand(candidate, command string) bool {
+	args := strings.TrimSpace(strings.TrimPrefix(command, candidate))
+	if strings.HasPrefix(args, "--version") || strings.HasPrefix(args, "-version") ||
+		strings.HasPrefix(args, "--help") || strings.HasPrefix(args, "-h") {
+		return false
+	}
+	switch candidate {
+	case "osv-scanner":
+		return strings.HasPrefix(args, "scan ") || args == "scan"
+	case "trivy":
+		for _, target := range []string{"fs", "repo", "image", "rootfs", "sbom"} {
+			if args == target || strings.HasPrefix(args, target+" ") {
+				return true
+			}
+		}
+		return false
+	case "snyk":
+		return args == "test" || strings.HasPrefix(args, "test ")
+	case "nancy":
+		return args == "sleuth" || strings.HasPrefix(args, "sleuth ")
+	case "govulncheck", "grype":
+		return args != "" && !strings.HasPrefix(args, "-")
+	default:
+		return true
+	}
+}
+
+func matchSCACommand(script string) string {
+	for _, segment := range commandSeparatorPattern.Split(script, -1) {
+		command := normalizeCommand(segment)
+		for _, candidate := range scaCommandIdentifiers {
+			if (command == candidate.needle || strings.HasPrefix(command, candidate.needle+" ")) &&
+				validSCACommand(candidate.needle, command) {
+				return candidate.id
+			}
+		}
+	}
+
+	return ""
+}
+
+func scaToolCapabilities(toolID string) (vulnerabilities bool, malicious bool) {
+	for _, candidate := range append(scaActionIdentifiers, scaCommandIdentifiers...) {
+		if candidate.id == toolID {
+			vulnerabilities = vulnerabilities || candidate.coversVulnerabilities
+			malicious = malicious || candidate.coversMalicious
+		}
+	}
+	return
+}
+
+func scaToolInInsights(payload data.Payload) *si.SecurityTool {
+	if payload.RestData == nil || payload.Insights.Repository == nil {
+		return nil
+	}
+	for i := range payload.Insights.Repository.SecurityPosture.Tools {
+		tool := &payload.Insights.Repository.SecurityPosture.Tools[i]
+		if !isLicenseOnlyTool(tool.Type+" "+tool.Name) && looksLikeSCA(tool.Type+" "+tool.Name) {
+			return tool
+		}
+	}
+	return nil
+}
+
+func canonicalSCAToolID(value string) string {
+	if id := matchSCAAction(value); id != "" {
+		return id
+	}
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range scaCommandIdentifiers {
+		if strings.Contains(lower, candidate.needle) {
+			return candidate.id
+		}
+	}
+	if looksLikeSCA(lower) {
+		return lower
+	}
+	return ""
+}
+
+func detectSCAToolsInInsights(tools []si.SecurityTool) scaDetection {
+	var detection scaDetection
+	for _, tool := range tools {
+		if !tool.Integration.Ci || isLicenseOnlyTool(tool.Type+" "+tool.Name) ||
+			!looksLikeSCA(tool.Type+" "+tool.Name) {
+			continue
+		}
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			name = "SCA"
+		}
+		detection.scannerSignal = true
+		toolID := canonicalSCAToolID(name)
+		coversVulnerabilities, coversMalicious := scaToolCapabilities(toolID)
+		detection.sources = append(detection.sources, scaSource{
+			name:                  name,
+			toolID:                toolID,
+			policyDocumented:      len(tool.Rulesets) > 0,
+			coversVulnerabilities: coversVulnerabilities,
+			coversMalicious:       coversMalicious,
+		})
+	}
+	return detection
+}
+
+func normalizeCondition(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(value, "${{") && strings.HasSuffix(value, "}}") {
+		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "${{"), "}}"))
+	}
+	return value
+}
+
+func conditionState(condition *actionlint.String) (enabled bool, uncertain bool) {
+	if condition == nil {
+		return true, false
+	}
+	switch normalizeCondition(condition.Value) {
+	case "true":
+		return true, false
+	case "false":
+		return false, false
+	default:
+		return false, true
+	}
+}
+
+func continueOnErrorState(value *actionlint.Bool) (suppressed bool, uncertain bool) {
+	if value == nil {
+		return false, false
+	}
+	if value.Expression != nil {
+		return false, true
+	}
+	return value.Value, false
+}
+
+func shellSuppressesFailure(script string) bool {
+	lowerScript := strings.ToLower(script)
+	if strings.Contains(lowerScript, "set +e") {
+		return true
+	}
+	for _, line := range strings.Split(script, "\n") {
+		if matchSCACommand(line) == "" {
+			continue
+		}
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if strings.Contains(lower, "||") || strings.Contains(lower, "; exit 0") ||
+			strings.HasPrefix(lower, "if ") || strings.HasPrefix(lower, "! ") {
+			return true
+		}
+	}
+	return false
+}
+
+func stepSCAInvocation(step *actionlint.Step) (toolID string, shellSuppressed bool) {
+	if step == nil {
+		return "", false
+	}
+	switch exec := step.Exec.(type) {
+	case *actionlint.ExecAction:
+		if exec.Uses != nil {
+			return matchSCAAction(exec.Uses.Value), false
+		}
+	case *actionlint.ExecRun:
+		if exec.Run != nil {
+			return matchSCACommand(exec.Run.Value), shellSuppressesFailure(exec.Run.Value)
+		}
+	}
+	return "", false
+}
+
+func jobCheckContext(job *actionlint.Job) (string, bool) {
+	if job == nil {
+		return "", false
+	}
+	context := ""
+	if job.Name != nil {
+		context = strings.TrimSpace(job.Name.Value)
+	}
+	if context == "" && job.ID != nil {
+		context = strings.TrimSpace(job.ID.Value)
+	}
+	if context == "" || strings.Contains(context, "${{") {
+		return "", false
+	}
+	return context, true
+}
+
+func inspectDirectSCAJob(job *actionlint.Job) (toolIDs []string, blocked bool, nonBlocking bool, signal bool) {
+	for _, step := range job.Steps {
+		toolID, _ := stepSCAInvocation(step)
+		if toolID != "" {
+			signal = true
+			break
+		}
+	}
+	if !signal {
+		return nil, false, false, false
+	}
+	if len(job.Needs) > 0 {
+		return nil, true, false, true
+	}
+
+	enabled, uncertain := conditionState(job.If)
+	if uncertain {
+		return nil, true, false, true
+	}
+	if !enabled {
+		return nil, false, true, true
+	}
+	suppressed, uncertain := continueOnErrorState(job.ContinueOnError)
+	if uncertain {
+		return nil, true, false, true
+	}
+	if suppressed {
+		return nil, false, true, true
+	}
+
+	for _, step := range job.Steps {
+		toolID, shellSuppressed := stepSCAInvocation(step)
+		if toolID == "" {
+			continue
+		}
+		enabled, uncertain := conditionState(step.If)
+		if uncertain {
+			blocked = true
+			continue
+		}
+		if !enabled {
+			nonBlocking = true
+			continue
+		}
+		suppressed, uncertain := continueOnErrorState(step.ContinueOnError)
+		if uncertain {
+			blocked = true
+			continue
+		}
+		if suppressed || shellSuppressed {
+			nonBlocking = true
+			continue
+		}
+		toolIDs = append(toolIDs, toolID)
+	}
+	return
+}
+
+func detectSCAInWorkflows(files []data.WorkflowFile, defaultBranch string) scaDetection {
+	var detection scaDetection
+	parsed := make(map[string]*actionlint.Workflow)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
+			continue
+		}
+		if file.Truncated {
+			detection.inspectionBlocked = true
+			continue
+		}
+		workflow, errs := actionlint.Parse([]byte(file.Content))
+		if workflow == nil {
+			detection.inspectionBlocked = true
+			continue
+		}
+		if len(errs) > 0 {
+			detection.inspectionBlocked = true
+		}
+		parsed[strings.TrimPrefix(file.Path, "./")] = workflow
+	}
+
+	var inspectJob func(*actionlint.Job, map[string]bool) ([]scaSource, bool, bool, bool)
+	inspectJob = func(job *actionlint.Job, visiting map[string]bool) (sources []scaSource, blocked bool, nonBlocking bool, signal bool) {
+		if job == nil {
+			return
+		}
+		if job.WorkflowCall == nil || job.WorkflowCall.Uses == nil {
+			toolIDs, directBlocked, directNonBlocking, directSignal := inspectDirectSCAJob(job)
+			blocked, nonBlocking, signal = directBlocked, directNonBlocking, directSignal
+			if len(toolIDs) == 0 {
+				return
+			}
+			context, known := jobCheckContext(job)
+			if !known {
+				return nil, true, nonBlocking, true
+			}
+			for _, toolID := range toolIDs {
+				coversVulnerabilities, coversMalicious := scaToolCapabilities(toolID)
+				sources = append(sources, scaSource{
+					name:                  context,
+					toolID:                toolID,
+					workflowContext:       true,
+					coversVulnerabilities: coversVulnerabilities,
+					coversMalicious:       coversMalicious,
+				})
+			}
+			return
+		}
+
+		uses := strings.TrimSpace(job.WorkflowCall.Uses.Value)
+		if len(job.Needs) > 0 {
+			return nil, true, false, true
+		}
+		if id := matchSCAAction(uses); id != "" {
+			enabled, conditionUncertain := conditionState(job.If)
+			suppressed, continueUncertain := continueOnErrorState(job.ContinueOnError)
+			if conditionUncertain || continueUncertain {
+				return nil, true, false, true
+			}
+			if !enabled || suppressed {
+				return nil, false, true, true
+			}
+			// A remote reusable workflow can identify the scanner but not the
+			// called job name that GitHub includes in the emitted check context.
+			return nil, true, false, true
+		}
+		if !strings.HasPrefix(uses, "./") {
+			return nil, false, false, false
+		}
+		calledPath := strings.TrimPrefix(uses, "./")
+		if visiting[calledPath] {
+			return nil, true, false, true
+		}
+		called, ok := parsed[calledPath]
+		if !ok {
+			return nil, true, false, true
+		}
+		callerContext, known := jobCheckContext(job)
+		if !known {
+			return nil, true, false, true
+		}
+		visiting[calledPath] = true
+		defer delete(visiting, calledPath)
+		for _, calledJob := range called.Jobs {
+			childSources, childBlocked, childNonBlocking, childSignal := inspectJob(calledJob, visiting)
+			blocked = blocked || childBlocked
+			nonBlocking = nonBlocking || childNonBlocking
+			signal = signal || childSignal
+			for _, source := range childSources {
+				source.name = callerContext + " / " + source.name
+				sources = append(sources, source)
+			}
+		}
+		if !signal {
+			return nil, blocked, nonBlocking, false
+		}
+		enabled, conditionUncertain := conditionState(job.If)
+		suppressed, continueUncertain := continueOnErrorState(job.ContinueOnError)
+		if conditionUncertain || continueUncertain {
+			return nil, true, nonBlocking, true
+		}
+		if !enabled || suppressed {
+			return nil, blocked, true, true
+		}
+		return
+	}
+
+	for filePath, workflow := range parsed {
+		covered, coverageUncertain := workflowCoversChanges(workflow, defaultBranch)
+		for _, job := range workflow.Jobs {
+			sources, blocked, nonBlocking, signal := inspectJob(job, map[string]bool{filePath: true})
+			if !signal {
+				continue
+			}
+			detection.scannerSignal = true
+			detection.nonBlockingObserved = detection.nonBlockingObserved || nonBlocking
+			if blocked || coverageUncertain {
+				detection.inspectionBlocked = true
+			}
+			if !covered {
+				continue
+			}
+			if len(sources) > 0 {
+				detection.coverageProven = true
+				detection.sources = append(detection.sources, sources...)
+			}
+		}
+	}
+	return detection
+}
+
+func associateSCAPolicies(sources []scaSource, repositoryPolicy scaRepositoryPolicy) {
+	documentedTools := make(map[string]bool)
+	for _, source := range sources {
+		if !source.workflowContext && source.toolID != "" && source.policyDocumented {
+			documentedTools[source.toolID] = true
+		}
+	}
+	for i := range sources {
+		if !sources[i].workflowContext {
+			continue
+		}
+		if repositoryPolicy.documented {
+			sources[i].policyDocumented = true
+			sources[i].exceptionDocumented = repositoryPolicy.exceptionDocumented
+			continue
+		}
+		if documentedTools[sources[i].toolID] {
+			sources[i].policyDocumented = true
+		}
+	}
+}
+
+type scaRequiredStatusCheck struct {
+	context       string
+	integrationID *int64
+}
+
+func requiredStatusChecks(payload data.Payload) []scaRequiredStatusCheck {
+	var checks []scaRequiredStatusCheck
+	if payload.RepositoryMetadata != nil {
+		if detailed, ok := payload.RepositoryMetadata.(interface {
+			RequiredStatusChecks() []data.RequiredStatusCheck
+		}); ok {
+			for _, check := range detailed.RequiredStatusChecks() {
+				checks = append(checks, scaRequiredStatusCheck{
+					context:       check.Context,
+					integrationID: check.IntegrationID,
+				})
+			}
+		} else {
+			for _, context := range payload.RepositoryMetadata.RequiredStatusCheckContexts() {
+				checks = append(checks, scaRequiredStatusCheck{context: context})
+			}
+		}
+	}
+	if payload.GraphqlRepoData != nil {
+		for _, context := range payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts {
+			checks = append(checks, scaRequiredStatusCheck{context: context})
+		}
+	}
+	return checks
+}
+
+func requiredCheckMatchesSCA(required []scaRequiredStatusCheck, sources []scaSource) (
+	matched bool,
+	withPolicy bool,
+	withException bool,
+	withThreatCoverage bool,
+	producerUncertain bool,
+	context string,
+) {
+	for _, requiredCheck := range required {
+		normalizedRequired := strings.ToLower(strings.Join(strings.Fields(requiredCheck.context), " "))
+		if normalizedRequired == "" {
+			continue
+		}
+		for _, source := range sources {
+			if !source.workflowContext ||
+				normalizedRequired != strings.ToLower(strings.Join(strings.Fields(source.name), " ")) {
+				continue
+			}
+			if requiredCheck.integrationID != nil {
+				producerUncertain = true
+				continue
+			}
+			matched = true
+			context = requiredCheck.context
+			withPolicy = withPolicy || source.policyDocumented
+			withException = withException || (source.policyDocumented && source.exceptionDocumented)
+			withThreatCoverage = withThreatCoverage ||
+				(source.coversVulnerabilities && source.coversMalicious)
+		}
+	}
+	return
+}
+
+func hasSCAAction(workflow *actionlint.Workflow) bool {
+	if workflow == nil {
+		return false
+	}
+	for _, job := range workflow.Jobs {
+		if job == nil {
+			continue
+		}
+		if job.WorkflowCall != nil && job.WorkflowCall.Uses != nil {
+			enabled, uncertain := conditionState(job.If)
+			suppressed, continueUncertain := continueOnErrorState(job.ContinueOnError)
+			if enabled && !uncertain && !suppressed && !continueUncertain && matchSCAAction(job.WorkflowCall.Uses.Value) != "" {
+				return true
+			}
+		}
+		tools, _, _, _ := inspectDirectSCAJob(job)
+		if len(tools) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func isReleaseTriggered(workflow *actionlint.Workflow) bool {
+	for _, event := range workflow.On {
+		webhook, ok := event.(*actionlint.WebhookEvent)
+		if !ok {
+			continue
+		}
+		switch webhook.EventName() {
+		case "release":
+			return true
+		case "push":
+			if hasVersionTagFilter(webhook.Tags) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var versionTagPattern = regexp.MustCompile(`^(?:v?[0-9][0-9A-Za-z._*+?\[\]-]*|v\*[0-9A-Za-z._*+?\[\]-]*|\*(?:\.\*)+|v?\[[0-9A-Za-z._*+?\[\]-]*)$`)
+
+func hasVersionTagFilter(tags *actionlint.WebhookEventFilter) bool {
+	if tags.IsEmpty() {
+		return false
+	}
+	for _, value := range tags.Values {
+		if value != nil && versionTagPattern.MatchString(strings.ToLower(value.Value)) {
+			return true
+		}
+	}
+	return false
+}
+
+func releaseScaWorkflow(payload data.Payload) (path string, inspectionBlocked bool, err error) {
+	workflows, err := payload.GetWorkflowFiles()
+	if err != nil {
+		return "", false, err
+	}
+	for _, file := range workflows {
+		if !strings.HasSuffix(file.Name, ".yml") && !strings.HasSuffix(file.Name, ".yaml") {
+			continue
+		}
+		if file.Truncated {
+			inspectionBlocked = true
+			continue
+		}
+		workflow, errs := actionlint.Parse([]byte(file.Content))
+		if workflow == nil {
+			inspectionBlocked = true
+			continue
+		}
+		if len(errs) > 0 {
+			inspectionBlocked = true
+		}
+		if isReleaseTriggered(workflow) && hasSCAAction(workflow) {
+			return file.Path, inspectionBlocked, nil
+		}
+	}
+	return "", inspectionBlocked, nil
+}
+
+func repositoryDocumentation(payload data.Payload) ([]data.DocumentationFile, error) {
+	if payload.RestData == nil {
+		return nil, errors.New("repository documentation is unavailable")
+	}
+	files, err := payload.GetDocumentationFiles()
+	if payload.SecurityPolicy.Present && strings.TrimSpace(payload.SecurityPolicy.Content) != "" {
+		found := false
+		for _, file := range files {
+			if strings.EqualFold(file.Path, "SECURITY.md") || strings.HasSuffix(strings.ToLower(file.Path), "/security.md") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			files = append(files, data.DocumentationFile{Path: "SECURITY.md", Content: payload.SecurityPolicy.Content})
+		}
+	}
+	return files, err
+}
+
+func documentationSections(content string) []string {
+	content = htmlCommentPattern.ReplaceAllString(content, "")
+	var (
+		sections []string
+		current  []string
+		inFence  bool
+	)
+	flush := func() {
+		section := strings.ToLower(strings.Join(strings.Fields(strings.Join(current, "\n")), " "))
+		if strings.TrimSpace(section) != "" {
+			sections = append(sections, section)
+		}
+		current = nil
+	}
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || strings.HasPrefix(trimmed, ">") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			flush()
+		}
+		current = append(current, line)
+	}
+	flush()
+	return sections
+}
+
+func hasSCAContext(section string) bool {
+	return scaAcronymPattern.MatchString(section) ||
+		strings.Contains(section, "software composition analysis") ||
+		strings.Contains(section, "dependency scanning") ||
+		strings.Contains(section, "dependency review")
+}
+
+func policyStatements(section string) []string {
+	var statements []string
+	for _, statement := range sentenceSplitPattern.Split(section, -1) {
+		statement = strings.TrimSpace(statement)
+		if statement != "" {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
+}
+
+func statementNegated(statement string) bool {
+	return policyNegationPattern.MatchString(statement) || scopeNegationPattern.MatchString(statement)
+}
+
+func hasSCARemediationThreshold(section string) bool {
+	if !hasSCAContext(section) {
+		return false
+	}
+	vulnerabilityThreshold, licenseThreshold := false, false
+	for _, statement := range policyStatements(section) {
+		if statementNegated(statement) || !policyObligationPattern.MatchString(statement) ||
+			!remediationPattern.MatchString(statement) {
+			continue
+		}
+		vulnerabilityThreshold = vulnerabilityThreshold ||
+			(vulnerabilityPattern.MatchString(statement) && vulnerabilityThresholdPattern.MatchString(statement))
+		licenseThreshold = licenseThreshold ||
+			(licensePattern.MatchString(statement) && licenseThresholdPattern.MatchString(statement))
+	}
+	return vulnerabilityThreshold && licenseThreshold
+}
+
+func hasSCAReleaseRequirement(section string) bool {
+	if !hasSCAContext(section) {
+		return false
+	}
+	for _, statement := range policyStatements(section) {
+		if !statementNegated(statement) && hasSCAContext(statement) &&
+			policyObligationPattern.MatchString(statement) &&
+			remediationPattern.MatchString(statement) &&
+			(preReleasePattern.MatchString(statement) || releaseBlockedPattern.MatchString(statement)) {
+			return true
+		}
+	}
+	return false
+}
+
+func scaEnforcementPolicy(section string) (documented bool, exceptionDocumented bool) {
+	if !hasSCAContext(section) {
+		return false, false
+	}
+	coverage, blocking := false, false
+	for _, statement := range policyStatements(section) {
+		if statementNegated(statement) {
+			continue
+		}
+		coverage = coverage || (hasSCAContext(statement) &&
+			knownVulnerabilityPattern.MatchString(statement) &&
+			maliciousDependencyPattern.MatchString(statement) &&
+			allChangesPattern.MatchString(statement) &&
+			policyObligationPattern.MatchString(statement))
+		blocking = blocking || (policyObligationPattern.MatchString(statement) &&
+			mergeBlockingPattern.MatchString(statement))
+		exceptionDocumented = exceptionDocumented ||
+			(nonExploitablePattern.MatchString(statement) && exceptionPattern.MatchString(statement))
+	}
+	return coverage && blocking, exceptionDocumented
+}
+
+func findDocumentationPolicy(files []data.DocumentationFile, matcher func(string) bool) string {
+	for _, file := range files {
+		for _, section := range documentationSections(file.Content) {
+			if matcher(section) {
+				return file.Path
+			}
+		}
+	}
+	return ""
+}
+
+func findSCARepositoryPolicy(files []data.DocumentationFile) scaRepositoryPolicy {
+	var policy scaRepositoryPolicy
+	for _, file := range files {
+		for _, section := range documentationSections(file.Content) {
+			documented, exceptionDocumented := scaEnforcementPolicy(section)
+			if !documented {
+				continue
+			}
+			policy.documented = true
+			policy.exceptionDocumented = policy.exceptionDocumented || exceptionDocumented
+			if policy.path == "" {
+				policy.path = file.Path
+			}
+		}
+	}
+	return policy
+}
+
+// HasSCARemediationThresholdPolicy evaluates OSPS-VM-05.01 using the text of
+// repository documentation. Security Insights pointers and dependency tooling
+// are signals only because neither exposes the required threshold language.
+func HasSCARemediationThresholdPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	files, docsErr := repositoryDocumentation(payload)
+	if path := findDocumentationPolicy(files, hasSCARemediationThreshold); path != "" {
+		return gemara.Passed, "Repository documentation defines remediation thresholds for vulnerable dependencies and unacceptable licenses (" + path + ")", gemara.High
+	}
+
+	hasDepPolicy := payload.RestData != nil && payload.Insights.Repository != nil &&
+		payload.Insights.Repository.Documentation != nil &&
+		payload.Insights.Repository.Documentation.DependencyManagementPolicy != nil
+	if docsErr != nil || (payload.RestData != nil && payload.InsightsError) {
+		return gemara.NeedsReview, "Repository documentation or Security Insights could not be completely inspected; confirm an SCA remediation threshold covering vulnerabilities and licenses", gemara.Low
+	}
+	if hasDepPolicy {
+		return gemara.NeedsReview, "A dependency-management policy is declared in Security Insights, but its contents do not machine-verifiably define remediation thresholds for vulnerabilities and licenses", gemara.Medium
+	}
+	if payload.RestData != nil {
+		if configPath := payload.DependencyToolingConfig(); configPath != "" {
+			return gemara.NeedsReview, "Dependency tooling was found (" + configPath + "), but no substantive SCA remediation threshold was found in repository documentation", gemara.Medium
+		}
+	}
+	return gemara.Failed, "Repository documentation was completely inspected and no SCA remediation threshold covering vulnerabilities and licenses was found", gemara.Medium
+}
+
+// HasSCAReleasePolicy evaluates OSPS-VM-05.02 using explicit repository policy
+// language. Tool and workflow integrations remain NeedsReview signals because
+// they do not themselves state that violations must be resolved before release.
+func HasSCAReleasePolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	files, docsErr := repositoryDocumentation(payload)
+	if path := findDocumentationPolicy(files, hasSCAReleaseRequirement); path != "" {
+		return gemara.Passed, "Repository documentation requires SCA violations to be addressed before release (" + path + ")", gemara.High
+	}
+
+	hasDepPolicy := payload.RestData != nil && payload.Insights.Repository != nil &&
+		payload.Insights.Repository.Documentation != nil &&
+		payload.Insights.Repository.Documentation.DependencyManagementPolicy != nil
+	hasReleaseProcess := payload.RestData != nil && payload.Insights.Project != nil &&
+		payload.Insights.Project.Documentation != nil &&
+		payload.Insights.Project.Documentation.ReleaseProcess != nil
+	tool := scaToolInInsights(payload)
+	workflowPath, workflowBlocked, workflowErr := releaseScaWorkflow(payload)
+	if docsErr != nil || workflowErr != nil || workflowBlocked ||
+		(payload.RestData != nil && payload.InsightsError) {
+		return gemara.NeedsReview, "Repository documentation, Security Insights, or release workflows could not be completely inspected; confirm SCA violations must be addressed before release", gemara.Low
+	}
+	if hasDepPolicy || hasReleaseProcess || (tool != nil && tool.Integration.Release) || workflowPath != "" {
+		return gemara.NeedsReview, "Release or SCA process signals were found, but repository documentation does not machine-verifiably require SCA violations to be addressed before release", gemara.Medium
+	}
+	return gemara.Failed, "Repository documentation and release workflows were completely inspected and no policy requiring SCA violations to be addressed before release was found", gemara.Medium
+}
+
+// EnforcesSCAOnChanges evaluates OSPS-VM-05.03 end to end: a vulnerability or
+// malicious-dependency scanner must actively cover changes, its actual workflow
+// check context must exactly match a required check, and a documented policy
+// (including the non-exploitable-finding exception) must govern that gate.
+func EnforcesSCAOnChanges(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	var detection scaDetection
+	if payload.RestData != nil && payload.Insights.Repository != nil {
+		insights := detectSCAToolsInInsights(payload.Insights.Repository.SecurityPosture.Tools)
+		detection.sources = append(detection.sources, insights.sources...)
+		detection.scannerSignal = insights.scannerSignal
+	}
+
+	workflows, workflowErr := payload.GetWorkflowFiles()
+	if workflowErr != nil {
+		detection.inspectionBlocked = true
+	} else {
+		defaultBranch := ""
+		if payload.GraphqlRepoData != nil {
+			defaultBranch = payload.Repository.DefaultBranchRef.Name
+		}
+		workflowDetection := detectSCAInWorkflows(workflows, defaultBranch)
+		detection.sources = append(detection.sources, workflowDetection.sources...)
+		detection.inspectionBlocked = detection.inspectionBlocked || workflowDetection.inspectionBlocked
+		detection.coverageProven = workflowDetection.coverageProven
+		detection.scannerSignal = detection.scannerSignal || workflowDetection.scannerSignal
+		detection.nonBlockingObserved = workflowDetection.nonBlockingObserved
+	}
+
+	files, docsErr := repositoryDocumentation(payload)
+	repositoryPolicy := findSCARepositoryPolicy(files)
+	if docsErr != nil || (payload.RestData != nil && payload.InsightsError) {
+		detection.inspectionBlocked = true
+	}
+	associateSCAPolicies(detection.sources, repositoryPolicy)
+
+	required := requiredStatusChecks(payload)
+	matched, withPolicy, withException, withThreatCoverage, producerUncertain, context :=
+		requiredCheckMatchesSCA(required, detection.sources)
+	if matched {
+		if !withThreatCoverage {
+			return gemara.NeedsReview, "An all-change SCA workflow is required as " + context + ", but the detected scanner was not verified to cover both known vulnerabilities and malicious dependencies", gemara.Medium
+		}
+		if !withPolicy {
+			return gemara.NeedsReview, "An all-change SCA workflow is exactly required as " + context + ", but no documented SCA ruleset or repository policy was verified", gemara.Medium
+		}
+		if !withException {
+			return gemara.NeedsReview, "An all-change SCA workflow and documented policy are enforced by " + context + ", but the policy exception for declared non-exploitable findings could not be mechanically verified", gemara.Medium
+		}
+		return gemara.Passed, "An active SCA workflow covers all changes, exactly matches required check " + context + ", and enforces a documented policy including declared non-exploitable findings", gemara.High
+	}
+	if producerUncertain {
+		return gemara.NeedsReview, "An SCA workflow context matches a required ruleset check, but that check is pinned to a GitHub App whose identity could not be correlated to the workflow producer", gemara.Medium
+	}
+
+	if detection.inspectionBlocked && !detection.coverageProven {
+		return gemara.NeedsReview, "Workflow, documentation, or Security Insights inspection was incomplete, so end-to-end SCA enforcement could not be determined", gemara.Low
+	}
+	if detection.nonBlockingObserved {
+		return gemara.NeedsReview, "An SCA scanner is present but is disabled or allowed to succeed after scanner failure; confirm violations actually block changes", gemara.Medium
+	}
+	if detection.coverageProven {
+		if len(required) > 0 {
+			return gemara.NeedsReview, "An active SCA workflow covers changes, but none of its emitted job contexts exactly matches a required status check", gemara.Medium
+		}
+		if payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister() {
+			return gemara.Failed, "An active SCA workflow covers changes but its emitted job context is not required on the default branch", gemara.High
+		}
+		return gemara.NeedsReview, "An active SCA workflow covers changes, but default-branch required checks are not observable with the current token", gemara.Low
+	}
+	if detection.scannerSignal {
+		return gemara.NeedsReview, "SCA tooling was observed, but all-change coverage, active failure behavior, and exact required-check enforcement were not all verified", gemara.Medium
+	}
+	if payload.RestData != nil {
+		if configPath := payload.DependencyToolingConfig(); configPath != "" {
+			return gemara.NeedsReview, "Dependency tooling was found (" + configPath + "), but it does not prove merge-blocking SCA evaluation of every change", gemara.Low
+		}
+	}
+	if detection.inspectionBlocked {
+		return gemara.NeedsReview, "SCA evidence could not be completely inspected", gemara.Low
+	}
+	return gemara.Failed, "Complete workflow and policy inspection found no vulnerability or malicious-dependency scanner enforcing all changes", gemara.Medium
 }

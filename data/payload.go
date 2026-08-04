@@ -53,7 +53,10 @@ type BinaryAnalysis struct {
 type payloadCache struct {
 	workflows []WorkflowFile
 	// set once workflows have been fetched, so an empty result is not refetched
-	workflowsLoaded bool
+	workflowsLoaded     bool
+	documentation       []DocumentationFile
+	documentationErr    error
+	documentationLoaded bool
 }
 
 // AddEvidence, GetEvidence, and ClearEvidence implement gemara.HasEvidence.
@@ -231,6 +234,7 @@ func (p *Payload) GetWorkflowFiles() ([]WorkflowFile, error) {
 	if p.GraphqlRepoData == nil || p.Config == nil || p.cache == nil {
 		return nil, fmt.Errorf("payload missing required repository data")
 	}
+
 	if p.cache.workflowsLoaded {
 		return p.cache.workflows, nil
 	}
@@ -241,4 +245,21 @@ func (p *Payload) GetWorkflowFiles() ([]WorkflowFile, error) {
 	p.cache.workflows = files
 	p.cache.workflowsLoaded = true
 	return files, nil
+}
+
+// GetDocumentationFiles returns repository documentation once per payload.
+// VM-05 has three controls that inspect the same documents, so caching avoids
+// repeating a potentially large sequence of GitHub content requests.
+func (p *Payload) GetDocumentationFiles() ([]DocumentationFile, error) {
+	if p.RestData == nil || p.cache == nil {
+		return nil, fmt.Errorf("payload missing required repository data")
+	}
+	if p.cache.documentationLoaded {
+		return p.cache.documentation, p.cache.documentationErr
+	}
+	files, err := p.RestData.GetDocumentationFiles()
+	p.cache.documentation = files
+	p.cache.documentationErr = err
+	p.cache.documentationLoaded = true
+	return files, err
 }

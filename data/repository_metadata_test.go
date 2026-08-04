@@ -99,6 +99,25 @@ func TestRequiredStatusCheckContexts(t *testing.T) {
 	}
 }
 
+func TestRequiredStatusChecksPreservesIntegrationID(t *testing.T) {
+	integrationID := int64(12345)
+	metadata := &GitHubRepositoryMetadata{defaultBranchRules: &github.BranchRules{
+		RequiredStatusChecks: []*github.RequiredStatusChecksBranchRule{{
+			Parameters: github.RequiredStatusChecksRuleParameters{
+				RequiredStatusChecks: []*github.RuleStatusCheck{{
+					Context:       "Dependency Audit",
+					IntegrationID: &integrationID,
+				}},
+			},
+		}},
+	}}
+
+	assert.Equal(t, []RequiredStatusCheck{{
+		Context:       "Dependency Audit",
+		IntegrationID: &integrationID,
+	}}, metadata.RequiredStatusChecks())
+}
+
 func TestRulesetsObserved(t *testing.T) {
 	testCases := []struct {
 		name     string
