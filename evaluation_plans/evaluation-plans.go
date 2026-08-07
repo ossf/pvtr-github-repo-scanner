@@ -192,10 +192,10 @@ var (
 			reusable_steps.NotImplemented,
 		},
 		"OSPS-SA-03.01": {
-			reusable_steps.NotImplemented,
+			sec_assessment.HasSecurityAssessment,
 		},
 		"OSPS-SA-03.02": {
-			reusable_steps.NotImplemented,
+			sec_assessment.HasThreatModelAnalysis,
 		},
 		"OSPS-VM-01.01": {
 			reusable_steps.IsActive,
