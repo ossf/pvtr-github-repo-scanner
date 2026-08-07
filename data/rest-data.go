@@ -43,6 +43,7 @@ type RestData struct {
 	Releases                    []ReleaseData
 	ReleasesError               error `json:"-" yaml:"-"`
 	contents                    RepoContent
+	contentsObserved            bool
 	ghClient                    *github.Client `json:"-" yaml:"-"`
 	HttpClient                  HttpClient     `json:"-" yaml:"-"`
 }
@@ -435,6 +436,7 @@ func (r *RestData) getRepoContents() {
 		r.Config.Logger.Error(fmt.Sprintf("failed to retrieve top-level repo contents via GitHub API: %s", err.Error()))
 		return
 	}
+	r.contentsObserved = true
 	r.contents.Content = content
 	if len(r.contents.Content) == 0 {
 		r.Config.Logger.Error("no contents found at the top level of the repository")

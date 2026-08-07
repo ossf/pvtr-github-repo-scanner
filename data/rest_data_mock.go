@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/google/go-github/v74/github"
+	"github.com/privateerproj/privateer-sdk/config"
 )
 
 type ClientMock struct {
@@ -42,7 +43,7 @@ func (c *ClientMock) Do(req *http.Request) (*http.Response, error) {
 // cache instead of making an API call. Security Insights is initialized to its
 // empty-but-non-nil shape, matching the state Setup leaves it in.
 func NewRestDataWithContents(contents RepoContent) *RestData {
-	r := &RestData{contents: contents}
+	r := &RestData{contents: contents, contentsObserved: true}
 	r.ensureInsightsInitialized()
 	return r
 }
@@ -66,6 +67,32 @@ func NewPayloadWithHTTPMock(base Payload, body []byte, statusCode int, httpErr e
 	return base
 }
 
+// NewPayloadWithWorkflowCache builds a Payload whose workflow cache is
+// pre-seeded with the given files, so that other packages' tests can exercise
+// workflow-content checks (via GetWorkflowFiles) without a live GitHub client.
+// The cache is marked loaded so GetWorkflowFiles returns files as-is, even when
+// empty, without attempting a fetch.
+func NewPayloadWithWorkflowCache(base Payload, files []WorkflowFile) Payload {
+	if base.RestData == nil {
+		base.RestData = &RestData{}
+	}
+	// GetWorkflowFiles requires these to be non-nil before it will read the
+	// cache, so seed empty defaults when the caller left them unset.
+	if base.GraphqlRepoData == nil {
+		base.GraphqlRepoData = &GraphqlRepoData{}
+	}
+	if base.Config == nil {
+		base.Config = &config.Config{}
+	}
+	if base.cache == nil {
+		base.cache = &payloadCache{}
+	}
+	base.cache.workflows = files
+	base.cache.workflowsLoaded = true
+	base.ensureInsightsInitialized()
+	return base
+}
+
 // NewPayloadWithRepoContents builds a Payload whose RestData is backed by the
 // given root and subdirectory listings, so that other packages' tests can
 // exercise contents-based fallbacks (checkFile, FindFile, FindFileInDirs)
@@ -80,6 +107,10 @@ func NewPayloadWithRepoContents(base Payload, root []*github.RepositoryContent, 
 		sub[dir] = RepoContent{Content: entries}
 	}
 	base.contents = RepoContent{Content: root, SubContent: sub}
+	base.contentsObserved = true
+	if base.cache == nil {
+		base.cache = &payloadCache{}
+	}
 	base.ensureInsightsInitialized()
 	return base
 }

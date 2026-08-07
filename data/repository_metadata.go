@@ -29,6 +29,13 @@ type GitHubRepositoryMetadata struct {
 	ghOrg              *github.Organization
 }
 
+// RequiredStatusCheck retains the optional GitHub App pin attached to a
+// ruleset check. A matching context produced by another app is not equivalent.
+type RequiredStatusCheck struct {
+	Context       string
+	IntegrationID *int64
+}
+
 func (r *GitHubRepositoryMetadata) IsActive() bool {
 	return !r.ghRepo.GetArchived() && !r.ghRepo.GetDisabled()
 }
@@ -88,6 +95,7 @@ func (r *GitHubRepositoryMetadata) RequiredStatusCheckContexts() []string {
 	if r.defaultBranchRules == nil {
 		return nil
 	}
+
 	var contexts []string
 	for _, rule := range r.defaultBranchRules.RequiredStatusChecks {
 		if rule == nil {
@@ -100,6 +108,28 @@ func (r *GitHubRepositoryMetadata) RequiredStatusCheckContexts() []string {
 		}
 	}
 	return contexts
+}
+
+// RequiredStatusChecks returns ruleset checks without discarding producer pins.
+func (r *GitHubRepositoryMetadata) RequiredStatusChecks() []RequiredStatusCheck {
+	if r.defaultBranchRules == nil {
+		return nil
+	}
+	var checks []RequiredStatusCheck
+	for _, rule := range r.defaultBranchRules.RequiredStatusChecks {
+		if rule == nil {
+			continue
+		}
+		for _, check := range rule.Parameters.RequiredStatusChecks {
+			if check != nil {
+				checks = append(checks, RequiredStatusCheck{
+					Context:       check.Context,
+					IntegrationID: check.IntegrationID,
+				})
+			}
+		}
+	}
+	return checks
 }
 
 // RulesetsObserved reports whether the ruleset lookup for the default branch
