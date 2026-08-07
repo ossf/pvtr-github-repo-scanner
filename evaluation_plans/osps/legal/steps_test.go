@@ -273,6 +273,26 @@ func TestSplitSpdxExpression(t *testing.T) {
 			input:    "",
 			expected: []string{""},
 		},
+		{
+			name:     "WITH exception suffix",
+			input:    "Apache-2.0 WITH LLVM-exception",
+			expected: []string{"Apache-2.0"},
+		},
+		{
+			name:     "WITH exception inside grouped OR",
+			input:    "(GPL-2.0 WITH Classpath-exception-2.0) OR MIT",
+			expected: []string{"GPL-2.0", "MIT"},
+		},
+		{
+			name:     "Deprecated + suffix",
+			input:    "GPL-2.0+",
+			expected: []string{"GPL-2.0"},
+		},
+		{
+			name:     "Parentheses grouping",
+			input:    "(MIT OR Apache-2.0)",
+			expected: []string{"MIT", "Apache-2.0"},
+		},
 	}
 
 	for _, test := range tests {
@@ -463,6 +483,21 @@ func TestGoodLicense(t *testing.T) {
 			apiError:        nil,
 			expectedResult:  gemara.Failed,
 			expectedMessage: "These licenses are not OSI or FSF approved: DeprecatedBadLicense",
+		},
+		{
+			name: "OSI approved license with WITH exception clause (Kokkos pattern)",
+			payload: data.Payload{
+				GraphqlRepoData: func() *data.GraphqlRepoData {
+					repo := stubGraphqlRepo("")
+					repo.Repository.LicenseInfo.SpdxId = "Apache-2.0 WITH LLVM-exception"
+					return repo
+				}(),
+				Config: &config.Config{},
+			},
+			apiResponse:     []byte(`{"licenses":[{"licenseId":"Apache-2.0","isOsiApproved":true,"isFsfLibre":false}]}`),
+			apiError:        nil,
+			expectedResult:  gemara.Passed,
+			expectedMessage: "All license found are OSI or FSF approved",
 		},
 	}
 

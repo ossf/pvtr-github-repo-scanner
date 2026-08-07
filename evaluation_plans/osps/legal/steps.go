@@ -42,10 +42,23 @@ func getLicenseList(payload data.Payload, makeApiCall func(string, bool) ([]byte
 }
 
 func splitSpdxExpression(expression string) (spdx_ids []string) {
+	// Remove grouping parentheses; they affect evaluation order, not approval.
+	expression = strings.ReplaceAll(expression, "(", " ")
+	expression = strings.ReplaceAll(expression, ")", " ")
 	a := strings.Split(expression, " AND ")
 	for _, aa := range a {
 		b := strings.Split(aa, " OR ")
-		spdx_ids = append(spdx_ids, b...)
+		for _, token := range b {
+			token = strings.TrimSpace(token)
+			// Strip " WITH <exception>" — the exception clause is irrelevant to
+			// OSI/FSF approval; only the base license ID matters.
+			if idx := strings.Index(token, " WITH "); idx != -1 {
+				token = token[:idx]
+			}
+			// Strip deprecated "+" (or-later) suffix so "GPL-2.0+" resolves to "GPL-2.0".
+			token = strings.TrimSuffix(token, "+")
+			spdx_ids = append(spdx_ids, token)
+		}
 	}
 	return
 }
