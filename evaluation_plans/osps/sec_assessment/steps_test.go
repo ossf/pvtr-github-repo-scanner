@@ -1,6 +1,7 @@
 package sec_assessment
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -214,4 +215,265 @@ func buildGraphqlDataWithEntries(entries []fileEntry) *data.GraphqlRepoData {
 	}
 
 	return graphqlData
+}
+
+// restDataWithReleaseAndAssessments builds RestData describing a project that has
+// (or has not) published a release, with an optional self assessment and any
+// number of third-party assessments.
+func restDataWithReleaseAndAssessments(published bool, self si.Assessment, thirdParty ...si.Assessment) *data.RestData {
+	rd := &data.RestData{
+		Insights: si.SecurityInsights{
+			Repository: &si.Repository{},
+		},
+	}
+	rd.Insights.Repository.SecurityPosture.Assessments.Self = self
+	rd.Insights.Repository.SecurityPosture.Assessments.ThirdPartyAssessment = thirdParty
+	if published {
+		rd.Releases = []data.ReleaseData{{TagName: "v1.0.0", Draft: false}}
+	}
+	return rd
+}
+
+func Test_HasSecurityAssessment(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    data.Payload
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "no rest data - needs review",
+			payload:    data.Payload{RestData: nil},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether a security assessment was performed",
+		},
+		{
+			name: "release retrieval error - needs review",
+			payload: data.Payload{
+				RestData: &data.RestData{ReleasesError: fmt.Errorf("API unavailable")},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether a security assessment was performed",
+		},
+		{
+			name: "no published releases - not applicable",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(false, si.Assessment{}),
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the security-assessment requirement does not apply",
+		},
+		{
+			name: "only draft release - not applicable",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Insights: si.SecurityInsights{Repository: &si.Repository{}},
+					Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: true}},
+				},
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the security-assessment requirement does not apply",
+		},
+		{
+			name: "released with self assessment comment - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{Comment: "Reviewed the codebase"}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "released with self assessment evidence only - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{Evidence: ptrTo(si.URL("https://example.com/report"))}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "released with third-party assessment - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}, si.Assessment{Comment: "External audit"}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares 1 third-party security assessment(s), but their coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "released with multiple populated and empty third-party assessments - needs review with populated count",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(
+					true,
+					si.Assessment{},
+					si.Assessment{Comment: "External audit"},
+					si.Assessment{},
+					si.Assessment{Name: ptrTo("Independent review")},
+				),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares 2 third-party security assessment(s), but their coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "released with empty third-party assessment - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}, si.Assessment{}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no security assessment was found in Security Insights",
+		},
+		{
+			name: "released with whitespace-only assessment fields - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{
+					Comment:  " \t ",
+					Name:     ptrTo(" "),
+					Evidence: ptrTo(si.URL(" \n")),
+				}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no security assessment was found in Security Insights",
+		},
+		{
+			name: "released with no assessment - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no security assessment was found in Security Insights",
+		},
+		{
+			name: "released with nil insights repository - failed",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: false}},
+				},
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no security assessment was found in Security Insights",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMsg, _ := HasSecurityAssessment(tt.payload)
+			if gotResult != tt.wantResult {
+				t.Errorf("HasSecurityAssessment() result = %v, want %v", gotResult, tt.wantResult)
+			}
+			if gotMsg != tt.wantMsg {
+				t.Errorf("HasSecurityAssessment() message = %q, want %q", gotMsg, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func Test_HasThreatModelAnalysis(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    data.Payload
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "no rest data - needs review",
+			payload:    data.Payload{RestData: nil},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether threat modeling and attack surface analysis were performed",
+		},
+		{
+			name: "release retrieval error - needs review",
+			payload: data.Payload{
+				RestData: &data.RestData{ReleasesError: fmt.Errorf("API unavailable")},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether threat modeling and attack surface analysis were performed",
+		},
+		{
+			name: "no published releases - not applicable",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(false, si.Assessment{}),
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the threat-modeling requirement does not apply",
+		},
+		{
+			name: "only draft release - not applicable",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Insights: si.SecurityInsights{Repository: &si.Repository{}},
+					Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: true}},
+				},
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the threat-modeling requirement does not apply",
+		},
+		{
+			name: "self assessment mentions threat modeling - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{Comment: "Performed threat modeling using STRIDE"}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares threat modeling or attack surface analysis, but its coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "case-insensitive third-party assessment mentions attack surface - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}, si.Assessment{Name: ptrTo("ATTACK SURFACE analysis")}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Security Insights declares threat modeling or attack surface analysis, but its coverage and sufficiency require manual or AI-assisted review",
+		},
+		{
+			name: "assessment present but no threat modeling terms - needs review",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{Comment: "General security review"}),
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "A security assessment is declared but does not mention threat modeling or attack surface analysis - manual review needed",
+		},
+		{
+			name: "empty third-party assessment - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}, si.Assessment{}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no threat modeling or attack surface analysis was found in Security Insights",
+		},
+		{
+			name: "whitespace-only assessment - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{Comment: " \t ", Name: ptrTo(" ")}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no threat modeling or attack surface analysis was found in Security Insights",
+		},
+		{
+			name: "released with no assessment - failed",
+			payload: data.Payload{
+				RestData: restDataWithReleaseAndAssessments(true, si.Assessment{}),
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no threat modeling or attack surface analysis was found in Security Insights",
+		},
+		{
+			name: "released with nil insights repository - failed",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: false}},
+				},
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Project has published releases but no threat modeling or attack surface analysis was found in Security Insights",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMsg, _ := HasThreatModelAnalysis(tt.payload)
+			if gotResult != tt.wantResult {
+				t.Errorf("HasThreatModelAnalysis() result = %v, want %v", gotResult, tt.wantResult)
+			}
+			if gotMsg != tt.wantMsg {
+				t.Errorf("HasThreatModelAnalysis() message = %q, want %q", gotMsg, tt.wantMsg)
+			}
+		})
+	}
 }
