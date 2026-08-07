@@ -6,7 +6,7 @@ Many of the assessments depend upon the presence of a [Security Insights](https:
 
 ## Work in Progress
 
-Currently 41 control requirements across OSPS Baselines levels 1-3 are covered, with 11 not yet implemented. [Maturity Level 1](https://baseline.openssf.org/versions/2025-02-25.html#level-1) requirements are the most rigorously tested and are recommended for use. The results of these layer 1 assessments are integrated into [LFX Insights](https://insights.linuxfoundation.org/project/k8s/repository/kubernetes-kubernetes/security), powering the [Security & Best Practices results](https://insights.linuxfoundation.org/docs/metrics/security/).
+Currently 42 control requirements across OSPS Baselines levels 1-3 are covered, with 10 not yet implemented. [Maturity Level 1](https://baseline.openssf.org/versions/2025-02-25.html#level-1) requirements are the most rigorously tested and are recommended for use. The results of these layer 1 assessments are integrated into [LFX Insights](https://insights.linuxfoundation.org/project/k8s/repository/kubernetes-kubernetes/security), powering the [Security & Best Practices results](https://insights.linuxfoundation.org/docs/metrics/security/).
 
 ![alt text](kubernetes_insights_baseline.png)
 

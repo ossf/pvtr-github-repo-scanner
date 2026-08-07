@@ -189,7 +189,7 @@ var (
 			sec_assessment.HasDesignDocumentation,
 		},
 		"OSPS-SA-02.01": {
-			reusable_steps.NotImplemented,
+			sec_assessment.HasExternalInterfaceDocumentation,
 		},
 		"OSPS-SA-03.01": {
 			reusable_steps.NotImplemented,

@@ -1,6 +1,7 @@
 package sec_assessment
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -214,4 +215,200 @@ func buildGraphqlDataWithEntries(entries []fileEntry) *data.GraphqlRepoData {
 	}
 
 	return graphqlData
+}
+
+func Test_HasExternalInterfaceDocumentation(t *testing.T) {
+	oneRelease := []data.ReleaseData{{TagName: "v1.0.0"}}
+
+	tests := []struct {
+		name       string
+		payload    data.Payload
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "no rest data - needs review",
+			payload:    data.Payload{RestData: nil},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether the documentation describes all external software interfaces",
+		},
+		{
+			name: "release retrieval error - needs review",
+			payload: data.Payload{
+				RestData: &data.RestData{ReleasesError: fmt.Errorf("API unavailable")},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Release data is unavailable; manually review whether the documentation describes all external software interfaces",
+		},
+		{
+			name: "no published releases returns not applicable",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"api.md"}),
+				RestData:        &data.RestData{},
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the external interface documentation requirement does not apply",
+		},
+		{
+			name: "only draft release returns not applicable",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"api.md"}),
+				RestData:        &data.RestData{Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: true}}},
+			},
+			wantResult: gemara.NotApplicable,
+			wantMsg:    "No published releases found; the external interface documentation requirement does not apply",
+		},
+		{
+			name: "api doc file found - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"README.md", "api.md"}),
+				RestData:        &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "External interface documentation found (api.md), but coverage of all external interfaces requires manual review",
+		},
+		{
+			name: "openapi spec file found (case insensitive) - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"OpenAPI.yaml"}),
+				RestData:        &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "External interface documentation found (OpenAPI.yaml), but coverage of all external interfaces requires manual review",
+		},
+		{
+			name: "api directory found - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithEntries([]fileEntry{
+					{Name: "api", Type: "tree"},
+					{Name: "README.md", Type: "blob"},
+				}),
+				RestData: &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No external interface documentation file found in root, but found directories that may contain API documentation: api - manual review needed to confirm all external interfaces are documented",
+		},
+		{
+			name: "docs directory found - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithEntries([]fileEntry{
+					{Name: "docs", Type: "tree"},
+					{Name: "README.md", Type: "blob"},
+				}),
+				RestData: &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No external interface documentation file found in root, but found directories that may contain API documentation: docs - manual review needed to confirm all external interfaces are documented",
+		},
+		{
+			name: "multiple api directories found - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithEntries([]fileEntry{
+					{Name: "api", Type: "tree"},
+					{Name: "docs", Type: "tree"},
+					{Name: "README.md", Type: "blob"},
+				}),
+				RestData: &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No external interface documentation file found in root, but found directories that may contain API documentation: api, docs - manual review needed to confirm all external interfaces are documented",
+		},
+		{
+			name: "api file takes precedence over api directory - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithEntries([]fileEntry{
+					{Name: "docs", Type: "tree"},
+					{Name: "openapi.json", Type: "blob"},
+				}),
+				RestData: &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "External interface documentation found (openapi.json), but coverage of all external interfaces requires manual review",
+		},
+		{
+			name: "no doc file but DetailedGuide exists - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"README.md"}),
+				RestData: &data.RestData{
+					Releases: oneRelease,
+					Insights: si.SecurityInsights{
+						Project: &si.Project{
+							Documentation: &si.ProjectDocumentation{
+								DetailedGuide: ptrTo(si.URL("https://example.com/docs")),
+							},
+						},
+					},
+				},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No external interface documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm all external interfaces are documented",
+		},
+		{
+			name: "no doc file but QuickstartGuide exists - needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"README.md"}),
+				RestData: &data.RestData{
+					Releases: oneRelease,
+					Insights: si.SecurityInsights{
+						Project: &si.Project{
+							Documentation: &si.ProjectDocumentation{
+								QuickstartGuide: ptrTo(si.URL("https://example.com/quickstart")),
+							},
+						},
+					},
+				},
+			},
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "No external interface documentation file found, but quickstart guide specified in Security Insights - manual review needed to confirm all external interfaces are documented",
+		},
+		{
+			name: "release exists but no interface documentation - failed",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithFiles([]string{"README.md"}),
+				RestData: &data.RestData{
+					Releases: oneRelease,
+					Insights: si.SecurityInsights{
+						Project: &si.Project{
+							Documentation: &si.ProjectDocumentation{},
+						},
+					},
+				},
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Documentation describing the external software interfaces of released assets was NOT found",
+		},
+		{
+			name: "release exists but no graphql tree data - failed",
+			payload: data.Payload{
+				GraphqlRepoData: nil,
+				RestData:        &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Documentation describing the external software interfaces of released assets was NOT found",
+		},
+		{
+			name: "directory named like api file should not match as needs review",
+			payload: data.Payload{
+				GraphqlRepoData: buildGraphqlDataWithEntries([]fileEntry{
+					{Name: "api.md", Type: "tree"}, // directory, not a file
+					{Name: "README.md", Type: "blob"},
+				}),
+				RestData: &data.RestData{Releases: oneRelease},
+			},
+			wantResult: gemara.Failed,
+			wantMsg:    "Documentation describing the external software interfaces of released assets was NOT found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMsg, _ := HasExternalInterfaceDocumentation(tt.payload)
+			if gotResult != tt.wantResult {
+				t.Errorf("HasExternalInterfaceDocumentation() result = %v, want %v", gotResult, tt.wantResult)
+			}
+			if tt.wantMsg != "" && gotMsg != tt.wantMsg {
+				t.Errorf("HasExternalInterfaceDocumentation() message = %q, want %q", gotMsg, tt.wantMsg)
+			}
+		})
+	}
 }
