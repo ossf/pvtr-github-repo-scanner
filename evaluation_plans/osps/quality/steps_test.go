@@ -83,6 +83,250 @@ func Test_InsightsListsRepositories(t *testing.T) {
 	}
 }
 
+func Test_SubprojectsEnforceSecurityRequirements(t *testing.T) {
+	insightsWithRepos := func(selfURL string, repoURLs ...string) si.SecurityInsights {
+		repos := make([]si.ProjectRepository, 0, len(repoURLs))
+		for _, url := range repoURLs {
+			repos = append(repos, si.ProjectRepository{Url: si.URL(url)})
+		}
+		return si.SecurityInsights{
+			Header:     si.Header{URL: "https://github.com/org/repo/blob/main/security-insights.yml"},
+			Project:    &si.Project{Repositories: repos},
+			Repository: &si.Repository{Url: si.URL(selfURL)},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		payload     data.Payload
+		wantResult  gemara.Result
+		wantMsgPart string
+	}{
+		{
+			name:        "release data unobservable (nil RestData)",
+			payload:     data.Payload{},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "Release data is unavailable",
+		},
+		{
+			name: "release data unobservable (fetch error)",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					ReleasesError: errors.New("boom"),
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "could not be retrieved",
+		},
+		{
+			name: "no published releases",
+			payload: data.Payload{
+				RestData: &data.RestData{},
+			},
+			wantResult:  gemara.NotApplicable,
+			wantMsgPart: "No published releases found",
+		},
+		{
+			name: "only draft releases",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: true}},
+				},
+			},
+			wantResult:  gemara.NotApplicable,
+			wantMsgPart: "No published releases found",
+		},
+		{
+			name: "released but insights unparsable",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases:      []data.ReleaseData{{Draft: false}},
+					InsightsError: true,
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "could not be parsed",
+		},
+		{
+			name: "released but no insights file",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "No Security Insights file was found",
+		},
+		{
+			name: "released, project.repositories missing entirely",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: si.SecurityInsights{
+						Header: si.Header{URL: "https://github.com/org/repo/blob/main/security-insights.yml"},
+					},
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "does not list the project's repositories",
+		},
+		{
+			name: "released, project.repositories explicitly empty",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: si.SecurityInsights{
+						Header:  si.Header{URL: "https://github.com/org/repo/blob/main/security-insights.yml"},
+						Project: &si.Project{Repositories: []si.ProjectRepository{}},
+					},
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "does not list the project's repositories",
+		},
+		{
+			name: "released, insights lists only the current repository",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://github.com/org/repo",
+					),
+				},
+			},
+			wantResult:  gemara.NotApplicable,
+			wantMsgPart: "no repositories beyond the one under evaluation",
+		},
+		{
+			name: "released, current repo matched despite URL formatting differences",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://GitHub.com/Org/Repo.git/",
+					),
+				},
+			},
+			wantResult:  gemara.NotApplicable,
+			wantMsgPart: "no repositories beyond the one under evaluation",
+		},
+		{
+			name: "self matched via owner/repo fallback when repository.url is absent",
+			payload: data.Payload{
+				Config: &sdkconfig.Config{Vars: map[string]interface{}{"owner": "org", "repo": "repo"}},
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: si.SecurityInsights{
+						Header:  si.Header{URL: "https://github.com/org/repo/blob/main/security-insights.yml"},
+						Project: &si.Project{Repositories: []si.ProjectRepository{{Url: "https://github.com/org/repo"}}},
+						// Repository is deliberately left nil: SI v2's repository
+						// section is optional, and ensureInsightsInitialized
+						// substitutes an empty *si.Repository in that case.
+					},
+				},
+			},
+			wantResult:  gemara.NotApplicable,
+			wantMsgPart: "no repositories beyond the one under evaluation",
+		},
+		{
+			name: "released with subproject repositories",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://github.com/org/repo",
+						"https://github.com/org/subproject-a",
+						"https://github.com/org/subproject-b",
+					),
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "2 additional project repositories (https://github.com/org/subproject-a, https://github.com/org/subproject-b)",
+		},
+		{
+			name: "duplicate subproject entries are deduplicated",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://github.com/org/subproject-a",
+						"https://github.com/org/subproject-a.git",
+					),
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "1 additional project repository (https://github.com/org/subproject-a)",
+		},
+		{
+			name: "declared subprojects with no usable URL still need review",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://github.com/org/repo",
+						"", "",
+					),
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "without a usable URL",
+		},
+		{
+			name: "a resolvable subproject is still reported alongside unresolved entries",
+			payload: data.Payload{
+				RestData: &data.RestData{
+					Releases: []data.ReleaseData{{Draft: false}},
+					Insights: insightsWithRepos(
+						"https://github.com/org/repo",
+						"https://github.com/org/repo",
+						"https://github.com/org/subproject-a",
+						"",
+					),
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMsgPart: "skipped for lacking a usable URL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotResult, gotMsg, _ := SubprojectsEnforceSecurityRequirements(tt.payload)
+			if gotResult != tt.wantResult {
+				t.Errorf("result = %v, want %v (msg: %q)", gotResult, tt.wantResult, gotMsg)
+			}
+			if !strings.Contains(gotMsg, tt.wantMsgPart) {
+				t.Errorf("message = %q, want it to contain %q", gotMsg, tt.wantMsgPart)
+			}
+		})
+	}
+}
+
+func Test_normalizeRepoURL(t *testing.T) {
+	tests := map[string]string{
+		"https://github.com/org/repo":       "github.com/org/repo",
+		"http://github.com/org/repo/":       "github.com/org/repo",
+		"https://www.github.com/Org/Repo":   "github.com/org/repo",
+		"https://github.com/org/repo.git":   "github.com/org/repo",
+		"git@github.com:org/repo.git":       "github.com/org/repo",
+		"ssh://github.com/org/repo":         "github.com/org/repo",
+		"git://github.com/org/repo":         "github.com/org/repo",
+		"  https://github.com/org/repo  ":   "github.com/org/repo",
+		"":                                  "",
+		"https://gitlab.com/group/sub/repo": "gitlab.com/group/sub/repo",
+	}
+	for input, want := range tests {
+		if got := normalizeRepoURL(input); got != want {
+			t.Errorf("normalizeRepoURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func Test_NoBinariesInRepo(t *testing.T) {
 	tests := []struct {
 		name       string

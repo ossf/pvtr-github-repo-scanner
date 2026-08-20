@@ -166,7 +166,8 @@ var (
 			quality.InsightsListsRepositories,
 		},
 		"OSPS-QA-04.02": {
-			reusable_steps.NotImplemented,
+			reusable_steps.IsCodeRepo,
+			quality.SubprojectsEnforceSecurityRequirements,
 		},
 		"OSPS-QA-05.01": {
 			quality.NoBinariesInRepo,
