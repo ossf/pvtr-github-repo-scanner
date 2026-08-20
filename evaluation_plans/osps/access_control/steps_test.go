@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 	sdkai "github.com/privateerproj/privateer-sdk/ai"
 	sdkconfig "github.com/privateerproj/privateer-sdk/config"
 	"github.com/rhysd/actionlint"
@@ -696,10 +696,35 @@ func TestWorkflowEvidenceSource(t *testing.T) {
 		workflowEvidenceSource(data.Payload{}, ".github/workflows/release.yml"))
 }
 
-func TestWorkflowJobPermissionsPrompt(t *testing.T) {
-	want, err := os.ReadFile("testdata/workflow_job_permissions_prompt.golden")
+// TestWorkflowJobPermissionsPromptMatchesCatalog asserts the step sends the
+// exact prompt the catalog assembles for OSPS-AC-04.02, verifying the wiring and
+// requirement ID against the single source of truth rather than restating the
+// prompt wording here.
+func TestWorkflowJobPermissionsPromptMatchesCatalog(t *testing.T) {
+	originalFactory := newAIClientFromConfig
+	originalLoader := loadWorkflowFiles
+	t.Cleanup(func() {
+		newAIClientFromConfig = originalFactory
+		loadWorkflowFiles = originalLoader
+	})
+
+	scoped := data.WorkflowFile{
+		Name: "release.yml",
+		Path: ".github/workflows/release.yml",
+		Content: "on: [push]\njobs:\n  release:\n    runs-on: ubuntu-latest\n" +
+			"    permissions:\n      contents: write\n    steps:\n      - run: gh release create v1.0.0",
+	}
+	loadWorkflowFiles = func(data.Payload) ([]data.WorkflowFile, error) {
+		return []data.WorkflowFile{scoped}, nil
+	}
+	client := &accessControlAIClient{response: accessControlAIVerdict(`{"result":"needs_review","confidence":"low","message":"m","explanation":"e","citations":[]}`)}
+	newAIClientFromConfig = func(sdkconfig.Config) (sdkai.Client, error) { return client, nil }
+
+	WorkflowJobPermissionsLeastPrivilege(data.Payload{Config: &sdkconfig.Config{}})
+
+	want, err := reusable_steps.AIPrompt("OSPS-AC-04.02")
 	assert.NoError(t, err)
-	assert.Equal(t, workflowJobPermissionsPrompt, string(want))
+	assert.Equal(t, want, client.prompt)
 }
 
 func TestEvaluateWorkflowJobPermissions(t *testing.T) {

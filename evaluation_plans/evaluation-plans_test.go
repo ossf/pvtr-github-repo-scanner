@@ -7,6 +7,7 @@ import (
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/goccy/go-yaml"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,6 +38,16 @@ func TestAllSteps(t *testing.T) {
 		_, exists := OSPS["fake-id"]
 		assert.False(t, exists, "mutating AllSteps() result should not affect OSPS")
 	})
+}
+
+func TestAIAssistedRequirementsHaveSteps(t *testing.T) {
+	requirementIDs, err := reusable_steps.AIAssistedRequirementIDs()
+	assert.NoError(t, err)
+
+	allSteps := AllSteps()
+	for _, requirementID := range requirementIDs {
+		assert.Contains(t, allSteps, requirementID, "AI-assisted requirement %s has no registered steps", requirementID)
+	}
 }
 
 // TestAllCatalogAssessmentIDsHaveSteps ensures every assessment requirement ID
