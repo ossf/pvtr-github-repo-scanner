@@ -87,6 +87,17 @@ func HasPublishedRelease(payload data.Payload) (released bool, observable bool) 
 	return false, true
 }
 
+// ReleaseLabel names a release in evidence messages, preferring the tag.
+func ReleaseLabel(release data.ReleaseData) string {
+	if release.TagName != "" {
+		return release.TagName
+	}
+	if release.Name != "" {
+		return release.Name
+	}
+	return "(unnamed release)"
+}
+
 // AIFallback logs why an AI-assisted assessment was abandoned and returns
 // NeedsReview with the supplied fallback message. Use this when an AI-assisted
 // step cannot complete (e.g. client construction failure, missing evidence,

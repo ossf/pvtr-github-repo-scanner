@@ -49,7 +49,7 @@ var (
 			build_release.ReleaseHasUniqueIdentifier,
 		},
 		"OSPS-BR-02.02": {
-			reusable_steps.NotImplemented,
+			build_release.ReleaseAssetsAssociatedWithRelease,
 		},
 		"OSPS-BR-03.01": {
 			build_release.EnsureInsightsLinksUseHTTPS,

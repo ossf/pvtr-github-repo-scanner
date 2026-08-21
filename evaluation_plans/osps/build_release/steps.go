@@ -10,6 +10,7 @@ import (
 	"github.com/rhysd/actionlint"
 
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 )
 
 // Pre-compiled patterns used by workflow security checks.
@@ -492,6 +493,152 @@ func ReleaseHasUniqueIdentifier(payload data.Payload) (result gemara.Result, mes
 		return gemara.Failed, strings.Join(message, ". "), confidence
 	}
 	return gemara.Passed, "All releases found have a unique name", confidence
+}
+
+// releaseAssetCompanionSuffixes identify signature, checksum, attestation, and
+// SBOM companion files. A companion is associated with the artifact it
+// accompanies rather than carrying the release identifier itself, so it is
+// exempt from the name-association expectation.
+var releaseAssetCompanionSuffixes = []string{
+	".pem",
+	".sbom", ".spdx", ".spdx.json", ".cdx", ".cdx.json", ".cdx.xml",
+}
+
+// releaseAssetCompanionNames are exact (lowercased) asset names that accompany
+// a release without identifying a specific artifact: standard documentation
+// files, common split-license names, and the one manifest name the shared
+// checksum classifier's markers do not cover. Names are matched exactly rather
+// than by prefix so a real artifact such as license-manager.zip is not exempted.
+var releaseAssetCompanionNames = map[string]bool{
+	"md5sums": true,
+	"license": true, "license.txt": true, "license.md": true,
+	"license-mit": true, "license-apache": true,
+	"readme": true, "readme.txt": true, "readme.md": true,
+}
+
+// isReleaseAssetCompanion reports whether a lowercased asset name is a
+// companion file rather than a release artifact in its own right. Signature,
+// attestation, and checksum recognition is delegated to the classifiers shared
+// with ReleasesAreSignedOrAttested so the two controls cannot disagree about
+// the same asset; the local lists add only what those classifiers do not
+// cover (certificates, SBOMs, documentation).
+func isReleaseAssetCompanion(lowerName string) bool {
+	if signatureAssetKind(lowerName) != "" || isHashManifest(lowerName) {
+		return true
+	}
+	if releaseAssetCompanionNames[lowerName] {
+		return true
+	}
+	for _, suffix := range releaseAssetCompanionSuffixes {
+		if strings.HasSuffix(lowerName, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseIdentifierCandidates returns the lowercased identifier strings an
+// asset name may embed to associate itself with the release: the tag, the tag
+// without its leading "v", and the release name when it contains no spaces
+// (asset file names cannot contain a spaced title). Every candidate must be at
+// least two characters so a single digit cannot match almost any name.
+func releaseIdentifierCandidates(release data.ReleaseData) []string {
+	var candidates []string
+	tag := strings.ToLower(strings.TrimSpace(release.TagName))
+	if len(tag) >= 2 {
+		candidates = append(candidates, tag)
+		if trimmed := strings.TrimPrefix(tag, "v"); trimmed != tag && len(trimmed) >= 2 {
+			candidates = append(candidates, trimmed)
+		}
+	}
+	if name := strings.ToLower(strings.TrimSpace(release.Name)); len(name) >= 2 && !strings.Contains(name, " ") {
+		candidates = append(candidates, name)
+	}
+	return candidates
+}
+
+// assetNameContainsAny reports whether a lowercased asset name embeds any of
+// the candidate identifier strings.
+func assetNameContainsAny(lowerName string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(lowerName, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReleaseAssetsAssociatedWithRelease checks that when an official release is
+// created, all assets within that release are clearly associated with the
+// release identifier or another unique identifier for the asset.
+//
+// GitHub structurally attaches every asset to its release, so the observable
+// question is whether each asset's name also carries the release identifier
+// (tag, tag without the leading v, or release name), the convention the
+// baseline's recommendation describes. Signature, checksum, attestation, and
+// SBOM companions plus standard documentation files are exempt: they are
+// associated through the artifact they accompany. An asset without a
+// recognizable identifier is not proof of a violation, because "another unique
+// identifier for the asset" may come from a scheme the scanner cannot observe,
+// so such assets surface as NeedsReview rather than Failed.
+//
+//   - NeedsReview: release data unobservable, at least one non-companion asset
+//     does not embed a release identifier, or only companion files are
+//     published.
+//   - NotApplicable: no published releases, or no release publishes assets.
+//   - Passed: every non-companion asset embeds a release identifier.
+func ReleaseAssetsAssociatedWithRelease(payload data.Payload) (gemara.Result, string, gemara.ConfidenceLevel) {
+	released, observable := reusable_steps.HasPublishedRelease(payload)
+	if !observable {
+		return gemara.NeedsReview, "Release data is unavailable; manually review whether release assets are associated with the release identifier", gemara.Low
+	}
+	if !released {
+		return gemara.NotApplicable, "No published releases found; the asset-identifier requirement does not apply", gemara.High
+	}
+
+	totalAssets := 0
+	checkedAssets := 0
+	var unassociated []string
+	for _, release := range payload.Releases {
+		if release.Draft {
+			continue
+		}
+		candidates := releaseIdentifierCandidates(release)
+		for _, asset := range release.Assets {
+			lower := strings.ToLower(strings.TrimSpace(asset.Name))
+			if lower == "" {
+				continue
+			}
+			totalAssets++
+			if isReleaseAssetCompanion(lower) {
+				continue
+			}
+			checkedAssets++
+			if !assetNameContainsAny(lower, candidates) {
+				unassociated = append(unassociated, fmt.Sprintf("%s (release %s)", asset.Name, reusable_steps.ReleaseLabel(release)))
+			}
+		}
+	}
+
+	if totalAssets == 0 {
+		return gemara.NotApplicable, "Published releases have no attached assets; the asset-identifier requirement does not apply", gemara.Low
+	}
+	if len(unassociated) > 0 {
+		const maxListedAssets = 5
+		listed := unassociated
+		overflow := ""
+		if len(listed) > maxListedAssets {
+			overflow = fmt.Sprintf(" and %d more", len(listed)-maxListedAssets)
+			listed = listed[:maxListedAssets]
+		}
+		return gemara.NeedsReview, fmt.Sprintf(
+			"%d release asset(s) do not embed a release identifier in their name: %s%s. They may be associated through another identifier scheme; manual review required",
+			len(unassociated), strings.Join(listed, ", "), overflow), gemara.Low
+	}
+	if checkedAssets == 0 {
+		return gemara.NeedsReview, "Published release assets are only companion files (checksums, signatures, documentation); manually review how release artifacts are identified", gemara.Low
+	}
+	return gemara.Passed, "All release assets embed a release identifier (tag or release name) in their file name", gemara.Medium
 }
 
 func getLinks(payload data.Payload) []string {

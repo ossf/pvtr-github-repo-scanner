@@ -432,7 +432,7 @@ func ReleasesHaveSBOM(payload data.Payload) (result gemara.Result, message strin
 			}
 		}
 
-		label := releaseLabel(release)
+		label := reusable_steps.ReleaseLabel(release)
 		if hasCompiled || hasAmbiguous {
 			releasesWithArtifacts = append(releasesWithArtifacts, label)
 			if hasCompiled {
@@ -477,18 +477,6 @@ func ReleasesHaveSBOM(payload data.Payload) (result gemara.Result, message strin
 	// distribute it through another channel, so request manual evidence rather
 	// than reporting a definitive failure.
 	return gemara.NeedsReview, fmt.Sprintf("No SBOM was found among the GitHub assets for release(s) publishing compiled or archived software: %s. Review publisher evidence because an SBOM may be retained privately or distributed through another channel", strings.Join(releasesMissingSBOM, ", ")), gemara.Low
-}
-
-// releaseLabel returns a human-friendly identifier for a release, preferring the
-// tag name and falling back to the display name.
-func releaseLabel(release data.ReleaseData) string {
-	if release.TagName != "" {
-		return release.TagName
-	}
-	if release.Name != "" {
-		return release.Name
-	}
-	return "(unnamed release)"
 }
 
 // sbomExtensionSuffixes are filename suffixes that identify SBOM documents.
