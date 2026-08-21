@@ -70,11 +70,11 @@ func HasDependencyManagementPolicy(payload data.Payload) (result gemara.Result, 
 	return gemara.Failed, "Dependency management policy was NOT specified in Security Insights data", gemara.Medium
 }
 
-// DocumentsSecurityUpdatePolicy evaluates OSPS-DO-05.01: once a project has made
-// a release, its documentation must describe when releases or versions will no
-// longer receive security updates.
+// DocumentsSecurityUpdatePolicy evaluates whether a project that has made a
+// release documents when releases or versions will no longer receive security
+// updates.
 //
-// The requirement is conditional on a release existing, so a project with no
+// The assessment is conditional on a release existing, so a project with no
 // releases is NotApplicable rather than a failure. Security Insights'
 // support-policy field is the explicit, machine-readable signal; a SUPPORT.md
 // (or README "Support" section) is a weaker fallback that warrants review since

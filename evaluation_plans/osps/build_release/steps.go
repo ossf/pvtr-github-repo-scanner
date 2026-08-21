@@ -137,8 +137,8 @@ func CicdSanitizedInputParameters(payload data.Payload) (gemara.Result, string, 
 		"GitHub Workflows variables do not contain untrusted inputs")
 }
 
-// CicdUntrustedCodeIsolation checks OSPS-BR-01.03: CI/CD pipelines that operate
-// on untrusted code snapshots must prevent access to privileged credentials.
+// CicdUntrustedCodeIsolation checks that CI/CD pipelines operating on untrusted
+// code snapshots prevent access to privileged credentials.
 //
 // The requirement is broad and only partly decidable by static analysis, so the
 // result is tiered to ensure a privileged workflow is never silently passed:
@@ -227,7 +227,7 @@ type namedWorkflow struct {
 }
 
 // classifyUntrustedCodeIsolation aggregates the per-workflow findings into the
-// tiered OSPS-BR-01.03 verdict documented on CicdUntrustedCodeIsolation. It is
+// tiered verdict documented on CicdUntrustedCodeIsolation. It is
 // separated from workflow decoding so the tiering logic is unit-testable without
 // a payload fixture.
 func classifyUntrustedCodeIsolation(workflows []namedWorkflow) (gemara.Result, string) {
@@ -744,8 +744,8 @@ func isHashManifest(lowerName string) bool {
 	return false
 }
 
-// ReleasesAreSignedOrAttested evaluates OSPS-BR-06.01: released assets must be
-// signed, or accounted for in a signed manifest. Evidence comes from a
+// ReleasesAreSignedOrAttested evaluates whether released assets are signed, or
+// accounted for in a signed manifest. Evidence comes from a
 // self-declared SLSA attestation in Security Insights or the signature assets
 // published with the release; a bare checksum manifest is flagged for review.
 //
@@ -884,9 +884,9 @@ func SecretsManagementPolicy(payload data.Payload) (result gemara.Result, messag
 	return gemara.NeedsReview, "No documented policy for managing secrets and credentials was found in the repository's security policy; manual review is required to confirm one exists elsewhere", gemara.Low
 }
 
-// DependenciesUseStandardizedTooling implements OSPS-BR-05.01: when a build and
-// release pipeline ingests dependencies, it MUST use standardized tooling where
-// available. GitHub's dependency graph only detects manifests produced by
+// DependenciesUseStandardizedTooling checks whether a build and release
+// pipeline that ingests dependencies uses standardized tooling where available.
+// GitHub's dependency graph only detects manifests produced by
 // standardized ecosystem tooling (e.g. go.mod, package.json, requirements.txt,
 // Cargo.toml, pom.xml), so the presence of at least one detected manifest is a
 // strong signal that dependencies are ingested through standardized tooling.
@@ -899,14 +899,15 @@ func DependenciesUseStandardizedTooling(payload data.Payload) (result gemara.Res
 	return gemara.NeedsReview, "No dependency manifests found in the GitHub dependency graph. Review the project to confirm that any dependencies ingested by the build and release pipeline use standardized tooling.", confidence
 }
 
-// CicdSanitizesCollaboratorInput implements OSPS-BR-01.04: CI/CD pipelines
-// which accept trusted collaborator input MUST sanitize and validate that
-// input prior to use in the pipeline.
+// CicdSanitizesCollaboratorInput checks that CI/CD pipelines accepting trusted
+// collaborator input sanitize and validate that input prior to use in the
+// pipeline.
 //
 // "Trusted collaborator input" here is workflow_dispatch inputs: values a
 // collaborator with write access types in when manually triggering a
-// workflow. Unlike OSPS-BR-01.01's fixed list of GitHub-controlled untrusted
-// metadata, workflow_dispatch input names are workflow-specific, so this
+// workflow. Unlike CicdSanitizedInputParameters, which works from a fixed list
+// of GitHub-controlled untrusted metadata, workflow_dispatch input names are
+// workflow-specific, so this
 // check derives the sensitive expressions from each workflow's own declared
 // inputs, then flags any of them interpolated directly into a run: step's
 // script body - both a single named field (inputs.<name> or
@@ -925,7 +926,7 @@ func DependenciesUseStandardizedTooling(payload data.Payload) (result gemara.Res
 //
 //   - An input assigned to a step-level env: var and referenced as a shell
 //     variable (e.g. "$TARGET") is not flagged, matching the convention used
-//     by CicdSanitizedInputParameters (OSPS-BR-01.01): that indirection is
+//     by CicdSanitizedInputParameters: that indirection is
 //     the recommended mitigation. This is a static, syntactic boundary
 //     rather than a dataflow proof - re-interpolating the env context back
 //     into a run: script (${{ env.TARGET }}) reintroduces the same

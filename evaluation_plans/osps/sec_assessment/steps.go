@@ -109,9 +109,9 @@ var InterfaceDocDirectories = []string{
 	"proto",
 }
 
-// HasExternalInterfaceDocumentation assesses OSPS-SA-02.01: when the project has
-// made a release, its documentation must describe all external software
-// interfaces (APIs) of the released assets.
+// HasExternalInterfaceDocumentation assesses whether a project that has made a
+// release documents all external software interfaces (APIs) of the released
+// assets.
 func HasExternalInterfaceDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	// The requirement only applies once a release exists.
 	released, observable := reusable_steps.HasPublishedRelease(payload)
@@ -275,9 +275,9 @@ func securityAssessments(payload data.Payload) si.SecurityPosture {
 	return payload.Insights.Repository.SecurityPosture
 }
 
-// HasSecurityAssessment implements OSPS-SA-03.01: when the project has made a
-// release, it MUST perform a security assessment to understand the most likely
-// and impactful potential security problems in the software.
+// HasSecurityAssessment assesses whether a project that has made a release has
+// performed a security assessment covering the most likely and impactful
+// potential security problems in the software.
 func HasSecurityAssessment(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	released, observable := reusable_steps.HasPublishedRelease(payload)
 	if !observable {
@@ -314,10 +314,9 @@ func HasSecurityAssessment(payload data.Payload) (result gemara.Result, message 
 	return gemara.Failed, "Project has published releases but no security assessment was found in Security Insights", gemara.Medium
 }
 
-// HasThreatModelAnalysis implements OSPS-SA-03.02: when the project has made a
-// release, it MUST perform threat modeling and attack surface analysis to
-// understand and protect against attacks on critical code paths, functions,
-// and interactions within the system.
+// HasThreatModelAnalysis assesses whether a project that has made a release has
+// performed threat modeling and attack surface analysis covering attacks on
+// critical code paths, functions, and interactions within the system.
 func HasThreatModelAnalysis(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	released, observable := reusable_steps.HasPublishedRelease(payload)
 	if !observable {

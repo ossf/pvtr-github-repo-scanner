@@ -8,6 +8,7 @@ import (
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/markdown"
 	"github.com/ossf/si-tooling/v2/si"
 	"github.com/rhysd/actionlint"
 )
@@ -575,9 +576,9 @@ func requiredCheckMatchesSast(requiredContexts []string, sastSources []sastSourc
 	return matched, withPolicy
 }
 
-// SastEnforcedOnChanges implements OSPS-VM-06.02: all changes to the codebase
-// must be automatically evaluated for security weaknesses and blocked on
-// violations. It confirms both that a SAST tool runs on changes (in CI, per
+// SastEnforcedOnChanges checks that all changes to the codebase are
+// automatically evaluated for security weaknesses and blocked on violations.
+// It confirms both that a SAST tool runs on changes (in CI, per
 // Security Insights or a workflow triggered by pull_request/push) and that it is
 // enforced as a required status check that blocks merges to the default branch.
 func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
@@ -623,7 +624,7 @@ func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message 
 	return evaluateSastEnforcement(detection, requiredContexts, adminObservable)
 }
 
-// evaluateSastEnforcement applies the OSPS-VM-06.02 decision matrix to the
+// evaluateSastEnforcement applies the SastEnforcedOnChanges decision matrix to the
 // gathered signals, kept separate from data access so it can be unit tested with
 // plain inputs.
 func evaluateSastEnforcement(detection sastDetection, requiredContexts []string, adminObservable bool) (gemara.Result, string, gemara.ConfidenceLevel) {
@@ -714,8 +715,8 @@ func hasDisclosurePolicySignal(payload data.Payload) bool {
 	return false
 }
 
-// PublishesVulnerabilityData assesses OSPS-VM-04.01: the project must publicly
-// publish data about discovered vulnerabilities. A published GitHub Security
+// PublishesVulnerabilityData assesses whether the project publicly publishes
+// data about discovered vulnerabilities. A published GitHub Security
 // Advisory (GHSA) is direct, public evidence of that. When none are observable
 // the check never fails — a project may simply have had no vulnerabilities to
 // disclose yet — and instead defers to human review.
@@ -739,8 +740,8 @@ func PublishesVulnerabilityData(payload data.Payload) (result gemara.Result, mes
 	return gemara.NeedsReview, "No published GitHub security advisories were found; confirm manually whether the project publicly publishes data about discovered vulnerabilities", gemara.Low
 }
 
-// HasVexDocument assesses OSPS-VM-04.02: vulnerabilities in software components
-// not affecting the project must be accounted for in a VEX document. GitHub
+// HasVexDocument assesses whether vulnerabilities in software components that
+// do not affect the project are accounted for in a VEX document. GitHub
 // exposes no VEX signal, so the check looks for a VEX document published in the
 // repository. Absence cannot confirm a violation — the project may have no
 // non-affecting vulnerabilities to account for — so it defers to human review.
@@ -781,7 +782,6 @@ var (
 	scopeNegationPattern          = regexp.MustCompile(`\b(?:not all|not every|only some|only selected)\s+(?:code\s+)?changes?\b`)
 	negatedRemediationPattern     = regexp.MustCompile(`\bnot\s+(?:be\s+)?(?:address(?:ed)?|remediat(?:e|ed)?|resolv(?:e|ed)?|fix(?:ed)?|remov(?:e|ed)?|replac(?:e|ed)?|reject(?:ed)?|block(?:ed)?)\b`)
 	sentenceSplitPattern          = regexp.MustCompile(`[.!?;]+(?:\s+|$)`)
-	htmlCommentPattern            = regexp.MustCompile(`(?s)<!--.*?-->`)
 )
 
 var scaToolKeywords = []string{"software composition", "dependency scanning", "dependency analysis", "composition analysis"}
@@ -1449,35 +1449,15 @@ func repositoryDocumentation(payload data.Payload) ([]data.DocumentationFile, er
 	return files, err
 }
 
+// documentationSections returns the prose sections of a documentation file,
+// lowercased and collapsed onto a single line each. The downstream matchers
+// compare against lowercase literals and expect no line breaks inside a
+// statement, so the normalization happens here rather than in markdown.Sections.
 func documentationSections(content string) []string {
-	content = htmlCommentPattern.ReplaceAllString(content, "")
-	var (
-		sections []string
-		current  []string
-		inFence  bool
-	)
-	flush := func() {
-		section := strings.ToLower(strings.Join(strings.Fields(strings.Join(current, "\n")), " "))
-		if strings.TrimSpace(section) != "" {
-			sections = append(sections, section)
-		}
-		current = nil
+	var sections []string
+	for _, section := range markdown.Sections(content) {
+		sections = append(sections, strings.ToLower(strings.Join(strings.Fields(section), " ")))
 	}
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
-			continue
-		}
-		if inFence || strings.HasPrefix(trimmed, ">") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			flush()
-		}
-		current = append(current, line)
-	}
-	flush()
 	return sections
 }
 
@@ -1604,8 +1584,9 @@ func findSCARepositoryPolicy(files []data.DocumentationFile) scaRepositoryPolicy
 	return policy
 }
 
-// HasSCARemediationThresholdPolicy evaluates OSPS-VM-05.01 using the text of
-// repository documentation. Security Insights pointers and dependency tooling
+// HasSCARemediationThresholdPolicy evaluates whether the project documents a
+// severity threshold at which SCA findings must be remediated, using the text
+// of repository documentation. Security Insights pointers and dependency tooling
 // are signals only because neither exposes the required threshold language.
 func HasSCARemediationThresholdPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	files, docsErr := repositoryDocumentation(payload)
@@ -1633,7 +1614,8 @@ func HasSCARemediationThresholdPolicy(payload data.Payload) (result gemara.Resul
 	return gemara.Failed, "Repository documentation was completely inspected and no SCA remediation threshold covering vulnerabilities and licenses was found", gemara.Medium
 }
 
-// HasSCAReleasePolicy evaluates OSPS-VM-05.02 using explicit repository policy
+// HasSCAReleasePolicy evaluates whether the project documents that SCA
+// violations must be resolved before release, using explicit repository policy
 // language. Tool and workflow integrations remain NeedsReview signals because
 // they do not themselves state that violations must be resolved before release.
 func HasSCAReleasePolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
@@ -1663,7 +1645,7 @@ func HasSCAReleasePolicy(payload data.Payload) (result gemara.Result, message st
 	return gemara.Failed, "Repository documentation and release workflows were completely inspected and no policy requiring SCA violations to be addressed before release was found", gemara.Medium
 }
 
-// EnforcesSCAOnChanges evaluates OSPS-VM-05.03 end to end: a vulnerability or
+// EnforcesSCAOnChanges evaluates SCA enforcement end to end: a vulnerability or
 // malicious-dependency scanner must actively cover changes, its actual workflow
 // check context must exactly match a required check, and a documented policy
 // (including the non-exploitable-finding exception) must govern that gate.

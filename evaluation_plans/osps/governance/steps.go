@@ -5,6 +5,7 @@ import (
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/markdown"
 )
 
 // ContributionGuideFiles are the conventional CONTRIBUTING filenames that GitHub
@@ -275,50 +276,6 @@ var (
 	)
 )
 
-// escalationPolicySections splits a documentation file into markdown-heading
-// sections with fenced code blocks removed, so vocabulary co-occurrence is
-// judged within one topical section rather than across an entire file.
-func escalationPolicySections(content string) []string {
-	var (
-		sections []string
-		current  []string
-		inFence  bool
-	)
-	flush := func() {
-		if len(current) > 0 {
-			sections = append(sections, strings.Join(current, "\n"))
-			current = nil
-		}
-	}
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		// Tracking fence state as we scan, rather than matching balanced pairs,
-		// means an unterminated fence swallows the rest of the file instead of
-		// leaving its contents to be read as prose. It also covers ~~~ fences.
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
-			continue
-		}
-		if inFence {
-			continue
-		}
-		// Blockquotes are skipped, matching the vuln_management scanner: the
-		// common governance blockquote quotes the requirement being satisfied,
-		// which contains exactly the vocabulary that would earn an unearned
-		// Pass. A policy stated only inside a callout degrades to the
-		// governance-file NeedsReview branch rather than being credited.
-		if strings.HasPrefix(trimmed, ">") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			flush()
-		}
-		current = append(current, line)
-	}
-	flush()
-	return sections
-}
-
 // escalationSentences splits a section into sentences. Judging co-occurrence
 // per sentence rather than per section is what ties the review verb to the
 // escalation it governs.
@@ -416,7 +373,10 @@ func HasEscalatedPermissionsReviewPolicy(payload data.Payload) (result gemara.Re
 	policyFile := ""
 	mentionFile := ""
 	for _, file := range files {
-		for _, section := range escalationPolicySections(file.Content) {
+		// A policy stated only inside a fence, a callout, or an HTML comment is
+		// not seen here, so it degrades to the NeedsReview branch below rather
+		// than being credited; see markdown.Sections for why each is dropped.
+		for _, section := range markdown.Sections(file.Content) {
 			mention, policy := classifyEscalationSection(section)
 			if policy && policyFile == "" {
 				policyFile = file.Path

@@ -77,4 +77,6 @@ release-mac:
 	$(BUILD_MAC) -ldflags="$(BUILD_FLAGS) -X 'main.VersionPostfix=darwin'"
 
 bin:
-	@mv $(PACKNAME)* ~/privateer/bin
+	@echo "  >  Copying binary to ~/.privateer/bin ..."
+	@mkdir -p ~/.privateer/bin
+	@mv $(PACKNAME)* ~/.privateer/bin
