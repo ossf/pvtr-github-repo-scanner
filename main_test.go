@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans"
 )
 
 // The publish metadata (Publisher, License, catalogNamespaces) is inert at run
@@ -27,6 +29,16 @@ func TestPublishManifest(t *testing.T) {
 	}
 	if len(manifest.Evaluates) != len(catalogNamespaces) {
 		t.Fatalf("evaluated %d catalogs, want %d", len(manifest.Evaluates), len(catalogNamespaces))
+	}
+	// Keep the override map keyed to the catalog contract, so a stale or
+	// typo'd key can't sit unused while the assertions above stay green.
+	if len(catalogNamespaces) != len(evaluation_plans.SupportedCatalogIDs) {
+		t.Errorf("catalogNamespaces has %d entries, want %d", len(catalogNamespaces), len(evaluation_plans.SupportedCatalogIDs))
+	}
+	for _, id := range evaluation_plans.SupportedCatalogIDs {
+		if _, ok := catalogNamespaces[id]; !ok {
+			t.Errorf("catalogNamespaces missing supported catalog %q", id)
+		}
 	}
 	for _, e := range manifest.Evaluates {
 		if !strings.HasPrefix(e.Catalog, "ossf/") {

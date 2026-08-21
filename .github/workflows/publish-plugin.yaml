@@ -14,10 +14,19 @@ on:
       hub-url:
         description: "grc.store hub to publish to"
         required: true
+        type: choice
         default: "https://hub.preview.grc.store"
+        options:
+          - "https://hub.preview.grc.store"
+          - "https://hub.grc.store"
 
-permissions:
-  contents: read
+permissions: {}
+
+# The first successful publish TOFU-pins the signer, so never let two publishes
+# race; queue them instead.
+concurrency:
+  group: publish-plugin
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -31,10 +40,12 @@ jobs:
       # ci_publishers trusted publisher for the ossf namespace.
       id-token: write
     env:
-      # TODO: must be a pvtr release that contains `pvtr publish` — see REV-345.
-      PVTR_VERSION: REPLACE_WITH_PVTR_RELEASE_TAG
+      PVTR_VERSION: v0.22.1 # first pvtr release that ships `pvtr publish`
       PVTR_HUB_URL: ${{ inputs.hub-url }}
     steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -44,6 +55,12 @@ jobs:
           go-version-file: go.mod
       - name: install pvtr
         run: go install github.com/privateerproj/privateer@${PVTR_VERSION}
+      # This rebuild is not byte-identical to the release-attested artifacts
+      # (BuiltAt is stamped per build), so the hub's Sigstore bundle attests
+      # these bytes, not the GitHub release's. `pvtr publish --dist` needs a
+      # GoReleaser dist dir (artifacts.json + metadata.json), which release
+      # assets don't carry — publishing the attested bytes needs the release
+      # run's dist persisted or SDK support first.
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> v2"
@@ -58,9 +75,10 @@ jobs:
             echo "hub ${PVTR_HUB_URL} advertises no ci_audience" >&2
             exit 1
           fi
+          audience_uri=$(jq -rn --arg a "$audience" '$a|@uri')
           PVTR_TOKEN=$(curl -fsSL \
             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | jq -r '.value')
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_uri}" | jq -r '.value')
           if [ -z "$PVTR_TOKEN" ] || [ "$PVTR_TOKEN" = "null" ]; then
             echo "failed to mint a hub OIDC token for audience ${audience}" >&2
             exit 1
