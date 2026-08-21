@@ -1137,3 +1137,203 @@ func TestIsSignatureOrChecksumAsset(t *testing.T) {
 		}
 	}
 }
+
+// fakeReviewRulesMetadata stubs the accessors RequiresNonAuthorApproval reads;
+// embedding the interface leaves every other method unimplemented so a step
+// that reaches for one fails loudly.
+type fakeReviewRulesMetadata struct {
+	data.RepositoryMetadata
+	rules data.PullRequestReviewRules
+	admin bool
+}
+
+func (f *fakeReviewRulesMetadata) DefaultBranchPullRequestReviewRules() data.PullRequestReviewRules {
+	return f.rules
+}
+func (f *fakeReviewRulesMetadata) ViewerCanAdminister() bool { return f.admin }
+
+func TestRequiresNonAuthorApproval(t *testing.T) {
+	classic := func(requires bool, count int, lastPush bool) *data.GraphqlRepoData {
+		g := &data.GraphqlRepoData{}
+		g.Repository.DefaultBranchRef.BranchProtectionRule.RequiresApprovingReviews = requires
+		g.Repository.DefaultBranchRef.BranchProtectionRule.RequireLastPushApproval = lastPush
+		g.Repository.DefaultBranchRef.RefUpdateRule.RequiredApprovingReviewCount = count
+		return g
+	}
+
+	tests := []struct {
+		name           string
+		payload        data.Payload
+		wantResult     gemara.Result
+		wantMsgPart    string
+		wantConfidence gemara.ConfidenceLevel
+	}{
+		{
+			// The docker/cli shape from issue #440: classic protection invisible
+			// to a READ token, publicly-readable ruleset requires one approval
+			// with last-push approval. Previously a false Failed.
+			name: "ruleset approval with last-push approval passes for non-admin",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true, RequiredApprovals: 1, RequireLastPushApproval: true,
+				}},
+			},
+			wantResult:     gemara.Passed,
+			wantMsgPart:    "requires 1 non-author approving review(s)",
+			wantConfidence: gemara.High,
+		},
+		{
+			// This repository's own shape from issue #440: ruleset requires one
+			// approval, no last-push approval or stale dismissal. Previously a
+			// false Failed; the stale-approval gap now routes to a human.
+			name: "ruleset approval without stale protection needs review",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true, RequiredApprovals: 1,
+				}},
+			},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "commits pushed after an approval can merge unreviewed",
+			wantConfidence: gemara.Medium,
+		},
+		{
+			name: "dismiss stale reviews also closes the gap",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true, RequiredApprovals: 2, DismissStaleReviews: true,
+				}},
+			},
+			wantResult:     gemara.Passed,
+			wantMsgPart:    "requires 2 non-author approving review(s)",
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "classic protection observed by admin passes",
+			payload: data.Payload{
+				GraphqlRepoData: classic(true, 2, true),
+				RepositoryMetadata: &fakeReviewRulesMetadata{
+					rules: data.PullRequestReviewRules{Observed: true},
+					admin: true,
+				},
+			},
+			wantResult:     gemara.Passed,
+			wantMsgPart:    "requires 2 non-author approving review(s)",
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "no observed requirement without admin needs review",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true,
+				}},
+			},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "only visible to admin tokens",
+			wantConfidence: gemara.Low,
+		},
+		{
+			name: "admin observing no requirement anywhere fails",
+			payload: data.Payload{
+				GraphqlRepoData: classic(false, 0, false),
+				RepositoryMetadata: &fakeReviewRulesMetadata{
+					rules: data.PullRequestReviewRules{Observed: true},
+					admin: true,
+				},
+			},
+			wantResult:     gemara.Failed,
+			wantMsgPart:    "Neither repository rulesets nor classic branch protection",
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "admin with unobserved rulesets needs review",
+			payload: data.Payload{
+				GraphqlRepoData: classic(false, 0, false),
+				RepositoryMetadata: &fakeReviewRulesMetadata{
+					rules: data.PullRequestReviewRules{},
+					admin: true,
+				},
+			},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "Repository rulesets could not be observed",
+			wantConfidence: gemara.Low,
+		},
+		{
+			// Nil metadata means rulesets were never looked up either, and the
+			// ruleset message is checked first, so that is the reported reason.
+			name:           "zero-value payload does not panic and needs review",
+			payload:        data.Payload{},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "Repository rulesets could not be observed",
+			wantConfidence: gemara.Low,
+		},
+		{
+			// A ruleset-arm entry must not report a classic count the entry
+			// gate itself refused to trust (stale RefUpdateRule count with
+			// RequiresApprovingReviews false).
+			name: "stale classic count without classic requirement is not reported",
+			payload: data.Payload{
+				GraphqlRepoData: classic(false, 3, false),
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true, RequiredApprovals: 1, RequireLastPushApproval: true,
+				}},
+			},
+			wantResult:     gemara.Passed,
+			wantMsgPart:    "requires 1 non-author approving review(s)",
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "classic approval without stale protection needs review",
+			payload: data.Payload{
+				GraphqlRepoData: classic(true, 1, false),
+				RepositoryMetadata: &fakeReviewRulesMetadata{
+					rules: data.PullRequestReviewRules{Observed: true},
+					admin: true,
+				},
+			},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "commits pushed after an approval can merge unreviewed",
+			wantConfidence: gemara.Medium,
+		},
+		{
+			name: "cross-source aggregation reports the higher requirement",
+			payload: data.Payload{
+				GraphqlRepoData: classic(true, 3, false),
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{
+					Observed: true, RequiredApprovals: 1, DismissStaleReviews: true,
+				}},
+			},
+			wantResult:     gemara.Passed,
+			wantMsgPart:    "requires 3 non-author approving review(s)",
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "non-admin with unobserved rulesets reports the ruleset gap",
+			payload: data.Payload{
+				GraphqlRepoData:    &data.GraphqlRepoData{},
+				RepositoryMetadata: &fakeReviewRulesMetadata{rules: data.PullRequestReviewRules{}},
+			},
+			wantResult:     gemara.NeedsReview,
+			wantMsgPart:    "Repository rulesets could not be observed",
+			wantConfidence: gemara.Low,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, message, confidence := RequiresNonAuthorApproval(testCase.payload)
+			if result != testCase.wantResult {
+				t.Errorf("result = %v, want %v (msg: %q)", result, testCase.wantResult, message)
+			}
+			if !strings.Contains(message, testCase.wantMsgPart) {
+				t.Errorf("message %q does not contain %q", message, testCase.wantMsgPart)
+			}
+			if confidence != testCase.wantConfidence {
+				t.Errorf("confidence = %v, want %v", confidence, testCase.wantConfidence)
+			}
+		})
+	}
+}

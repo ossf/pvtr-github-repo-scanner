@@ -19,7 +19,20 @@ type RepositoryMetadata interface {
 	HasBranchRules() bool
 	RequiredStatusCheckContexts() []string
 	RulesetsObserved() bool
+	DefaultBranchPullRequestReviewRules() PullRequestReviewRules
 	ViewerCanAdminister() bool
+}
+
+// PullRequestReviewRules summarizes the pull_request rules the repository's
+// rulesets enforce on the default branch. Observed distinguishes a completed
+// ruleset lookup from one that never happened. When several rulesets apply,
+// GitHub enforces all of them, so RequiredApprovals is the maximum declared
+// count and the booleans are true when any applying rule sets them.
+type PullRequestReviewRules struct {
+	Observed                bool
+	RequiredApprovals       int
+	RequireLastPushApproval bool
+	DismissStaleReviews     bool
 }
 
 type GitHubRepositoryMetadata struct {
@@ -138,6 +151,26 @@ func (r *GitHubRepositoryMetadata) RequiredStatusChecks() []RequiredStatusCheck 
 // callers tell "observed, none configured" from "never observed".
 func (r *GitHubRepositoryMetadata) RulesetsObserved() bool {
 	return r.defaultBranchRules != nil
+}
+
+// DefaultBranchPullRequestReviewRules aggregates every applying pull_request
+// rule; see PullRequestReviewRules for the aggregation semantics.
+func (r *GitHubRepositoryMetadata) DefaultBranchPullRequestReviewRules() PullRequestReviewRules {
+	if r.defaultBranchRules == nil {
+		return PullRequestReviewRules{}
+	}
+	rules := PullRequestReviewRules{Observed: true}
+	for _, rule := range r.defaultBranchRules.PullRequest {
+		if rule == nil {
+			continue
+		}
+		if rule.Parameters.RequiredApprovingReviewCount > rules.RequiredApprovals {
+			rules.RequiredApprovals = rule.Parameters.RequiredApprovingReviewCount
+		}
+		rules.RequireLastPushApproval = rules.RequireLastPushApproval || rule.Parameters.RequireLastPushApproval
+		rules.DismissStaleReviews = rules.DismissStaleReviews || rule.Parameters.DismissStaleReviewsOnPush
+	}
+	return rules
 }
 
 // ViewerCanAdminister reports whether the scanning token holds admin on the

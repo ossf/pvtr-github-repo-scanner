@@ -248,3 +248,44 @@ func TestLoadRepositoryMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultBranchPullRequestReviewRules(t *testing.T) {
+	prRule := func(count int, lastPush, dismiss bool) *github.PullRequestBranchRule {
+		return &github.PullRequestBranchRule{Parameters: github.PullRequestRuleParameters{
+			RequiredApprovingReviewCount: count,
+			RequireLastPushApproval:      lastPush,
+			DismissStaleReviewsOnPush:    dismiss,
+		}}
+	}
+
+	t.Run("unobserved rulesets", func(t *testing.T) {
+		metadata := &GitHubRepositoryMetadata{}
+		rules := metadata.DefaultBranchPullRequestReviewRules()
+		assert.False(t, rules.Observed)
+		assert.Zero(t, rules.RequiredApprovals)
+	})
+
+	t.Run("observed with no pull_request rules", func(t *testing.T) {
+		metadata := &GitHubRepositoryMetadata{defaultBranchRules: &github.BranchRules{}}
+		rules := metadata.DefaultBranchPullRequestReviewRules()
+		assert.True(t, rules.Observed)
+		assert.Zero(t, rules.RequiredApprovals)
+	})
+
+	t.Run("multiple rules aggregate max count and any booleans", func(t *testing.T) {
+		// The docker/cli shape: two applying rules; GitHub enforces the union,
+		// so the result must not depend on rule order.
+		metadata := &GitHubRepositoryMetadata{defaultBranchRules: &github.BranchRules{
+			PullRequest: []*github.PullRequestBranchRule{
+				prRule(1, true, false),
+				prRule(2, false, true),
+				nil,
+			},
+		}}
+		rules := metadata.DefaultBranchPullRequestReviewRules()
+		assert.True(t, rules.Observed)
+		assert.Equal(t, 2, rules.RequiredApprovals)
+		assert.True(t, rules.RequireLastPushApproval)
+		assert.True(t, rules.DismissStaleReviews)
+	})
+}
