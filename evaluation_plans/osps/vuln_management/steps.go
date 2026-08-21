@@ -619,15 +619,19 @@ func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message 
 		requiredContexts = append(requiredContexts, payload.RepositoryMetadata.RequiredStatusCheckContexts()...)
 	}
 
-	adminObservable := payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister()
+	// Protection state is observable either with an admin token (full detail)
+	// or when the publicly readable branch `protected` flag is false, which
+	// proves no protection — and hence no required checks — exists at all.
+	protectionObservable := (payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister()) ||
+		data.ObservedUnprotected(payload.RepositoryMetadata)
 
-	return evaluateSastEnforcement(detection, requiredContexts, adminObservable)
+	return evaluateSastEnforcement(detection, requiredContexts, protectionObservable)
 }
 
 // evaluateSastEnforcement applies the SastEnforcedOnChanges decision matrix to the
 // gathered signals, kept separate from data access so it can be unit tested with
 // plain inputs.
-func evaluateSastEnforcement(detection sastDetection, requiredContexts []string, adminObservable bool) (gemara.Result, string, gemara.ConfidenceLevel) {
+func evaluateSastEnforcement(detection sastDetection, requiredContexts []string, protectionObservable bool) (gemara.Result, string, gemara.ConfidenceLevel) {
 	if detection.inspectionBlocked && !detection.coverageProven {
 		return gemara.NeedsReview, "Workflow inspection was incomplete, so the scanner could not determine whether SAST runs on all changes", gemara.Low
 	}
@@ -646,7 +650,7 @@ func evaluateSastEnforcement(detection sastDetection, requiredContexts []string,
 		return gemara.NeedsReview, "A SAST tool runs in CI and required status checks are configured on the default branch, but none could be matched to the SAST tool; confirm the SAST check must pass before merging", gemara.Medium
 	}
 
-	if adminObservable {
+	if protectionObservable {
 		return gemara.Failed, "A SAST tool runs in CI but no required status check enforces it on the default branch, so violations do not block merges", gemara.High
 	}
 
@@ -1709,7 +1713,8 @@ func EnforcesSCAOnChanges(payload data.Payload) (result gemara.Result, message s
 		if len(required) > 0 {
 			return gemara.NeedsReview, "An active SCA workflow covers changes, but none of its emitted job contexts exactly matches a required status check", gemara.Medium
 		}
-		if payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister() {
+		if (payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister()) ||
+			data.ObservedUnprotected(payload.RepositoryMetadata) {
 			return gemara.Failed, "An active SCA workflow covers changes but its emitted job context is not required on the default branch", gemara.High
 		}
 		return gemara.NeedsReview, "An active SCA workflow covers changes, but default-branch required checks are not observable with the current token", gemara.Low

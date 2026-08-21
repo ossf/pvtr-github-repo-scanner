@@ -18,6 +18,7 @@ type fakeRequiredChecksMetadata struct {
 	data.RepositoryMetadata
 	requiredChecks []string
 	admin          bool
+	protectedFlag  *bool
 }
 
 func (f *fakeRequiredChecksMetadata) RequiredStatusCheckContexts() []string {
@@ -25,6 +26,8 @@ func (f *fakeRequiredChecksMetadata) RequiredStatusCheckContexts() []string {
 }
 
 func (f *fakeRequiredChecksMetadata) ViewerCanAdminister() bool { return f.admin }
+
+func (f *fakeRequiredChecksMetadata) DefaultBranchProtectedFlag() *bool { return f.protectedFlag }
 
 type fakePinnedRequiredCheckMetadata struct {
 	*fakeRequiredChecksMetadata

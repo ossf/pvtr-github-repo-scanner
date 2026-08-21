@@ -151,6 +151,44 @@ func TestRulesetsObserved(t *testing.T) {
 	}
 }
 
+func TestObservedUnprotected(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	testCases := []struct {
+		name     string
+		metadata RepositoryMetadata
+		expected bool
+	}{
+		{
+			name:     "nil metadata",
+			metadata: nil,
+			expected: false,
+		},
+		{
+			name:     "branch fetch failed, flag unobserved",
+			metadata: &GitHubRepositoryMetadata{},
+			expected: false,
+		},
+		{
+			name:     "protected flag true is a weak positive, not an observed absence",
+			metadata: &GitHubRepositoryMetadata{defaultBranchProtected: &trueVal},
+			expected: false,
+		},
+		{
+			name:     "protected flag false proves no protection exists",
+			metadata: &GitHubRepositoryMetadata{defaultBranchProtected: &falseVal},
+			expected: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.expected, ObservedUnprotected(testCase.metadata))
+		})
+	}
+}
+
 func TestViewerCanAdminister(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -206,16 +244,24 @@ func TestLoadRepositoryMetadata(t *testing.T) {
 						Owner: &github.User{
 							Login: github.Ptr("test-owner"),
 						},
-						Name:     github.Ptr("test-repo"),
-						Private:  github.Ptr(false),
-						Archived: github.Ptr(false),
-						Disabled: github.Ptr(false),
+						Name:          github.Ptr("test-repo"),
+						Private:       github.Ptr(false),
+						Archived:      github.Ptr(false),
+						Disabled:      github.Ptr(false),
+						DefaultBranch: github.Ptr("main"),
 					},
 				),
 				mock.WithRequestMatch(
 					mock.GetOrgsByOrg,
 					github.Organization{
 						Login: github.Ptr("test-owner"),
+					},
+				),
+				mock.WithRequestMatch(
+					mock.GetReposBranchesByOwnerByRepoByBranch,
+					github.Branch{
+						Name:      github.Ptr("main"),
+						Protected: github.Ptr(false),
 					},
 				),
 			},
@@ -244,6 +290,9 @@ func TestLoadRepositoryMetadata(t *testing.T) {
 				assert.True(t, repoMetadata.IsActive())
 				assert.True(t, repoMetadata.IsPublic())
 				assert.Nil(t, repoMetadata.OrganizationBlogURL())
+				if assert.NotNil(t, repoMetadata.DefaultBranchProtectedFlag()) {
+					assert.False(t, *repoMetadata.DefaultBranchProtectedFlag())
+				}
 			}
 		})
 	}

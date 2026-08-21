@@ -616,11 +616,11 @@ func TestRequiredCheckMatchesSast(t *testing.T) {
 
 func TestEvaluateSastEnforcement(t *testing.T) {
 	tests := []struct {
-		name             string
-		detection        sastDetection
-		requiredContexts []string
-		adminObservable  bool
-		wantResult       gemara.Result
+		name                 string
+		detection            sastDetection
+		requiredContexts     []string
+		protectionObservable bool
+		wantResult           gemara.Result
 	}{
 		{
 			name:             "SAST in CI enforced by a matching required check passes",
@@ -647,16 +647,16 @@ func TestEvaluateSastEnforcement(t *testing.T) {
 			wantResult:       gemara.NeedsReview,
 		},
 		{
-			name:            "SAST in CI with admin-observable absence of required checks fails",
-			detection:       sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
-			adminObservable: true,
-			wantResult:      gemara.Failed,
+			name:                 "SAST in CI with observable absence of required checks fails",
+			detection:            sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
+			protectionObservable: true,
+			wantResult:           gemara.Failed,
 		},
 		{
-			name:            "SAST in CI with unobservable branch protection needs review",
-			detection:       sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
-			adminObservable: false,
-			wantResult:      gemara.NeedsReview,
+			name:                 "SAST in CI with unobservable branch protection needs review",
+			detection:            sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
+			protectionObservable: false,
+			wantResult:           gemara.NeedsReview,
 		},
 		{
 			name:       "no SAST in CI fails",
@@ -683,7 +683,7 @@ func TestEvaluateSastEnforcement(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result, message, _ := evaluateSastEnforcement(test.detection, test.requiredContexts, test.adminObservable)
+		result, message, _ := evaluateSastEnforcement(test.detection, test.requiredContexts, test.protectionObservable)
 		assert.Equal(t, test.wantResult, result, test.name)
 		assert.NotEmpty(t, message, test.name)
 	}

@@ -20,13 +20,15 @@ type RepositoryMetadata interface {
 	RequiredStatusCheckContexts() []string
 	RulesetsObserved() bool
 	ViewerCanAdminister() bool
+	DefaultBranchProtectedFlag() *bool
 }
 
 type GitHubRepositoryMetadata struct {
-	Releases           []ReleaseData
-	defaultBranchRules *github.BranchRules
-	ghRepo             *github.Repository
-	ghOrg              *github.Organization
+	Releases               []ReleaseData
+	defaultBranchRules     *github.BranchRules
+	defaultBranchProtected *bool
+	ghRepo                 *github.Repository
+	ghOrg                  *github.Organization
 }
 
 // RequiredStatusCheck retains the optional GitHub App pin attached to a
@@ -140,6 +142,32 @@ func (r *GitHubRepositoryMetadata) RulesetsObserved() bool {
 	return r.defaultBranchRules != nil
 }
 
+// DefaultBranchProtectedFlag returns the `protected` boolean from the REST
+// "Get a branch" endpoint, or nil when the branch fetch failed. Unlike the
+// classic branch protection details (admin-only), this flag is readable by any
+// token — including anonymous requests — and is true when either classic
+// branch protection or any ruleset applies to the branch. A true value is a
+// weak positive (it may reflect only a deletion rule), but a false value is a
+// strong negative: no classic protection and no branch rules exist at all.
+// Visibility verified empirically against github.com (2026-08); the docs do
+// not spell it out, so GHES behavior may differ.
+func (r *GitHubRepositoryMetadata) DefaultBranchProtectedFlag() *bool {
+	return r.defaultBranchProtected
+}
+
+// ObservedUnprotected reports whether the scan positively observed that the
+// default branch has no protection of any kind — no classic branch protection
+// and no rulesets. It is the trustworthy negative counterpart to the
+// admin-only protection details: because any token can observe it, callers may
+// treat missing protection as a confident failure rather than as unobservable.
+func ObservedUnprotected(metadata RepositoryMetadata) bool {
+	if metadata == nil {
+		return false
+	}
+	flag := metadata.DefaultBranchProtectedFlag()
+	return flag != nil && !*flag
+}
+
 // ViewerCanAdminister reports whether the scanning token holds admin on the
 // repository. GitHub exposes classic branch protection (the GraphQL
 // BranchProtectionRule and RefUpdateRule objects) only to admins; for any other
@@ -176,8 +204,9 @@ func loadRepositoryMetadata(ghClient *github.Client, owner, repo string) (ghRepo
 	// separate endpoints, so fetch them concurrently.
 	// Errors are expected when an org or ruleset isn't in place; safe to ignore.
 	var (
-		organization *github.Organization
-		branchRules  *github.BranchRules
+		organization    *github.Organization
+		branchRules     *github.BranchRules
+		branchProtected *bool
 	)
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -192,12 +221,19 @@ func loadRepositoryMetadata(ghClient *github.Client, owner, repo string) (ghRepo
 			branchRules = rules // hoist
 		}
 	})
+	wg.Go(func() {
+		branch, _, branchErr := ghClient.Repositories.GetBranch(context.Background(), owner, repo, repository.GetDefaultBranch(), 1)
+		if branchErr == nil && branch != nil {
+			branchProtected = branch.Protected // hoist
+		}
+	})
 	wg.Wait()
 
 	return repository, &GitHubRepositoryMetadata{
-		ghRepo:             repository,
-		ghOrg:              organization,
-		defaultBranchRules: branchRules,
+		ghRepo:                 repository,
+		ghOrg:                  organization,
+		defaultBranchRules:     branchRules,
+		defaultBranchProtected: branchProtected,
 	}, nil
 }
 

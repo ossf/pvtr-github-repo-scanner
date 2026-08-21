@@ -28,6 +28,7 @@ type FakeBranchRuleMetadata struct {
 	protectedFromDeletion  *bool
 	rulesetsObserved       bool
 	viewerCanAdminister    bool
+	protectedFlag          *bool
 }
 
 func (f *FakeBranchRuleMetadata) IsDefaultBranchProtected() *bool {
@@ -48,6 +49,10 @@ func (f *FakeBranchRuleMetadata) RulesetsObserved() bool {
 
 func (f *FakeBranchRuleMetadata) ViewerCanAdminister() bool {
 	return f.viewerCanAdminister
+}
+
+func (f *FakeBranchRuleMetadata) DefaultBranchProtectedFlag() *bool {
+	return f.protectedFlag
 }
 
 // See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#setting-the-permissions-of-the-github_token-for-your-repository
@@ -234,6 +239,28 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 			wantResult:  gemara.NeedsReview,
 			wantMessage: unobservableProtectionMessage,
 		},
+		{
+			name: "observed unprotected: public protected flag false, non-admin token",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFlag: &falseVal,
+				},
+			},
+			wantResult:  gemara.Failed,
+			wantMessage: "Default branch has no branch protection rules or rulesets; pushes are unrestricted",
+		},
+		{
+			name: "weak positive: protected flag true alone stays unobservable",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFlag: &trueVal,
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
+		},
 	}
 
 	// Set branch protection fields on the GraphQL data
@@ -334,6 +361,28 @@ func Test_BranchProtectionPreventsDeletion(t *testing.T) {
 				RepositoryMetadata: &FakeBranchRuleMetadata{
 					protectedFromDeletion: &falseVal,
 					rulesetsObserved:      true,
+				},
+			},
+			wantResult:  gemara.NeedsReview,
+			wantMessage: unobservableProtectionMessage,
+		},
+		{
+			name: "observed unprotected: public protected flag false, non-admin token",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFlag: &falseVal,
+				},
+			},
+			wantResult:  gemara.Failed,
+			wantMessage: "Default branch has no branch protection rules or rulesets; deletions are not prevented",
+		},
+		{
+			name: "weak positive: protected flag true alone stays unobservable",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					protectedFlag: &trueVal,
 				},
 			},
 			wantResult:  gemara.NeedsReview,
