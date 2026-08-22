@@ -33,6 +33,12 @@ var (
 		"repo",
 		"token",
 	}
+	// The vendored Baseline YAML carries no metadata.author.id, so declare the owner.
+	catalogNamespaces = map[string]string{
+		"osps-baseline":         "openssf",
+		"osps-baseline-2025-10": "openssf",
+		"osps-baseline-2026-02": "openssf",
+	}
 	//go:embed data/catalogs
 	files   embed.FS
 	dataDir = filepath.Join("data", "catalogs")
@@ -43,10 +49,36 @@ func main() {
 		Version = fmt.Sprintf("%s-%s", Version, VersionPostfix)
 	}
 
-	orchestrator := pluginkit.EvaluationOrchestrator{
-		PluginName:    PluginName,
-		PluginVersion: Version,
-		PluginUri:     "https://github.com/ossf/pvtr-github-repo-scanner",
+	orchestrator, err := newOrchestrator()
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		os.Exit(shared.InternalError)
+	}
+
+	runCmd := command.NewPluginCommands(
+		PluginName,
+		Version,
+		GitCommitHash,
+		BuiltAt,
+		orchestrator,
+	)
+
+	err = runCmd.Execute()
+	if err != nil {
+		os.Exit(shared.InternalError)
+	}
+}
+
+// newOrchestrator builds the orchestrator. Publisher, License and
+// catalogNamespaces are unused at run time; `pvtr publish` reads them.
+func newOrchestrator() (*pluginkit.EvaluationOrchestrator, error) {
+	orchestrator := &pluginkit.EvaluationOrchestrator{
+		PluginName:        PluginName,
+		PluginVersion:     Version,
+		PluginUri:         "https://github.com/ossf/pvtr-github-repo-scanner",
+		Publisher:         "openssf",
+		License:           "Apache-2.0",
+		CatalogNamespaces: catalogNamespaces,
 	}
 	orchestrator.AddLoader(data.Loader)
 	orchestrator.AddTargetBuilder(func(c *config.Config) gemara.Resource {
@@ -59,30 +91,14 @@ func main() {
 		}
 	})
 
-	err := orchestrator.AddReferenceCatalogs(dataDir, files)
-	if err != nil {
-		fmt.Printf("Error loading catalog: %v\n", err)
-		os.Exit(shared.InternalError)
+	if err := orchestrator.AddReferenceCatalogs(dataDir, files); err != nil {
+		return nil, fmt.Errorf("error loading catalog: %w", err)
 	}
 
 	orchestrator.AddRequiredVars(RequiredVars)
 
-	err = pluginkit.AddEvaluationSuiteTypedForAllCatalogs(&orchestrator, nil, evaluation_plans.AllSteps())
-	if err != nil {
-		fmt.Printf("Error adding evaluation suites: %v\n", err)
-		os.Exit(shared.InternalError)
+	if err := pluginkit.AddEvaluationSuiteTypedForAllCatalogs(orchestrator, nil, evaluation_plans.AllSteps()); err != nil {
+		return nil, fmt.Errorf("error adding evaluation suites: %w", err)
 	}
-
-	runCmd := command.NewPluginCommands(
-		PluginName,
-		Version,
-		VersionPostfix,
-		GitCommitHash,
-		&orchestrator,
-	)
-
-	err = runCmd.Execute()
-	if err != nil {
-		os.Exit(shared.InternalError)
-	}
+	return orchestrator, nil
 }
