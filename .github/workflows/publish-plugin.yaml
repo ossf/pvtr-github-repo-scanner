@@ -8,8 +8,10 @@ name: "Publish plugin to grc.store"
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: "Tag or ref to build and publish (e.g. v0.28.0)"
+      tag:
+        # goreleaser (without --snapshot) refuses anything but an exact tag,
+        # so promise only what a dispatch can deliver.
+        description: "Tag to build and publish (e.g. v0.28.0)"
         required: true
       hub-url:
         description: "grc.store hub to publish to"
@@ -48,7 +50,7 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.tag }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -70,19 +72,12 @@ jobs:
         # the built binary itself.
         run: |
           set -euo pipefail
-          audience=$(curl -fsSL "${PVTR_HUB_URL}/.well-known/grc-store-configuration" | jq -r '.ci_audience')
-          if [ -z "$audience" ] || [ "$audience" = "null" ]; then
-            echo "hub ${PVTR_HUB_URL} advertises no ci_audience" >&2
-            exit 1
-          fi
+          # jq -e fails the step on a missing/null field; pipefail covers the curls.
+          audience=$(curl -fsSL "${PVTR_HUB_URL}/.well-known/grc-store-configuration" | jq -er '.ci_audience // empty')
           audience_uri=$(jq -rn --arg a "$audience" '$a|@uri')
           PVTR_TOKEN=$(curl -fsSL \
             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_uri}" | jq -r '.value')
-          if [ -z "$PVTR_TOKEN" ] || [ "$PVTR_TOKEN" = "null" ]; then
-            echo "failed to mint a hub OIDC token for audience ${audience}" >&2
-            exit 1
-          fi
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_uri}" | jq -er '.value // empty')
           echo "::add-mask::${PVTR_TOKEN}"
           export PVTR_TOKEN
           privateer publish
