@@ -35,9 +35,9 @@ var (
 	}
 	// The vendored Baseline YAML carries no metadata.author.id, so declare the owner.
 	catalogNamespaces = map[string]string{
-		"osps-baseline":         "ossf",
-		"osps-baseline-2025-10": "ossf",
-		"osps-baseline-2026-02": "ossf",
+		"osps-baseline":         "openssf",
+		"osps-baseline-2025-10": "openssf",
+		"osps-baseline-2026-02": "openssf",
 	}
 	//go:embed data/catalogs
 	files   embed.FS
@@ -76,7 +76,7 @@ func newOrchestrator() (*pluginkit.EvaluationOrchestrator, error) {
 		PluginName:        PluginName,
 		PluginVersion:     Version,
 		PluginUri:         "https://github.com/ossf/pvtr-github-repo-scanner",
-		Publisher:         "ossf",
+		Publisher:         "openssf",
 		License:           "Apache-2.0",
 		CatalogNamespaces: catalogNamespaces,
 	}

@@ -25,8 +25,8 @@ func TestPublishManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishManifest: %v", err)
 	}
-	if manifest.Coordinate != "ossf/github-repo" {
-		t.Errorf("coordinate = %q, want ossf/github-repo", manifest.Coordinate)
+	if manifest.Coordinate != "openssf/github-repo" {
+		t.Errorf("coordinate = %q, want openssf/github-repo", manifest.Coordinate)
 	}
 	if manifest.License != "Apache-2.0" {
 		t.Errorf("license = %q, want Apache-2.0", manifest.License)
@@ -45,8 +45,8 @@ func TestPublishManifest(t *testing.T) {
 		}
 	}
 	for _, e := range manifest.Evaluates {
-		if !strings.HasPrefix(e.Catalog, "ossf/") {
-			t.Errorf("catalog %q is not namespaced under ossf", e.Catalog)
+		if !strings.HasPrefix(e.Catalog, "openssf/") {
+			t.Errorf("catalog %q is not namespaced under openssf", e.Catalog)
 		}
 	}
 }

@@ -2,7 +2,7 @@
 name: "Publish plugin to grc.store"
 
 # Manual-only on purpose. The first successful publish TOFU-pins the signer
-# identity of ossf/github-repo to THIS workflow file's path, so it has to be a
+# identity of openssf/github-repo to THIS workflow file's path, so it has to be a
 # deliberate act and every later publish must come from this same file. Add a
 # `release: {types: [published]}` trigger once the manual run is proven.
 on:
@@ -39,7 +39,7 @@ jobs:
       # Mints two distinct OIDC tokens: the hub push token (audience =
       # ci_audience) and the Sigstore signing identity (audience = sigstore,
       # requested by pvtr itself). The hub must list this repo as a
-      # ci_publishers trusted publisher for the ossf namespace.
+      # ci_publishers trusted publisher for the openssf namespace.
       id-token: write
     env:
       PVTR_VERSION: v0.22.1 # first pvtr release that ships `pvtr publish`
