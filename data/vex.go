@@ -74,7 +74,7 @@ func hasVexDirSegment(dir string) bool {
 // detectVexDocuments walks the already-fetched repository tree and returns the
 // repo-root-relative paths of files that look like VEX documents. It reuses the
 // tree gathered for binary analysis, so it adds no extra API calls. Paths (not
-// bare names) are collected so the OSPS-VM-04.02 evidence message is unambiguous
+// bare names) are collected so the evidence message is unambiguous
 // when a VEX file lives in a subdirectory (e.g. security/vex/bom.json).
 func detectVexDocuments(tree *GraphqlRepoTree) []string {
 	if tree == nil {

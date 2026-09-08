@@ -207,7 +207,7 @@ func (r *RestData) checkFile(filename string) (filepath string) {
 // checkFileInSubdir returns the path to filename within the given subdirectory
 // (case-insensitive), or "" when the directory or file is absent. It lets build
 // documentation stored outside the root and .github (e.g. docs/BUILDING.md) be
-// discovered per OSPS-DO-07.01.
+// discovered.
 func (r *RestData) checkFileInSubdir(dir, filename string) string {
 	subdir, err := r.getSubdirContents(dir)
 	if err != nil {
@@ -277,10 +277,10 @@ func (r *RestData) HasSupportMarkdown() bool {
 }
 
 // buildInstructionFiles are well-known files whose presence indicates the
-// project documents how to build the software from source, satisfying
-// OSPS-DO-07.01 as developer task documentation or build automation. Matching
-// is case-insensitive (see checkFile), so a single canonical spelling covers
-// common variants such as "makefile" or "MAKEFILE".
+// project documents how to build the software from source, as developer task
+// documentation or build automation. Matching is case-insensitive (see
+// checkFile), so a single canonical spelling covers common variants such as
+// "makefile" or "MAKEFILE".
 var buildInstructionFiles = []string{
 	"Makefile",
 	"GNUmakefile",
@@ -294,8 +294,8 @@ var buildInstructionFiles = []string{
 }
 
 // buildInstructionHeadings are documentation section headings that indicate the
-// project explains how to build or set up the software from source per
-// OSPS-DO-07.01. Matching is case-insensitive and substring-based (see
+// project explains how to build or set up the software from source.
+// Matching is case-insensitive and substring-based (see
 // hasBuildInstructionHeading), so short roots such as "build" and "compil"
 // intentionally cover their variants ("building", "build from source",
 // "compiling", "compilation", etc.).
@@ -319,7 +319,7 @@ var buildInstructionHeadingExclusions = []string{
 }
 
 // hasBuildInstructionHeading reports whether any of the provided document
-// headings references build-from-source instructions per OSPS-DO-07.01.
+// headings references build-from-source instructions.
 func hasBuildInstructionHeading(headings []string) bool {
 	for _, heading := range headings {
 		normalized := strings.ToLower(strings.TrimSpace(heading))
@@ -347,7 +347,7 @@ func isExcludedBuildHeading(normalized string) bool {
 }
 
 // HasBuildInstructions returns true when the repository documents how to build
-// the software from source per OSPS-DO-07.01. It is satisfied by a well-known
+// the software from source. It is satisfied by a well-known
 // build automation or build documentation file (e.g. Makefile, BUILDING.md) in
 // the repository root, .github, or docs directory, or by a build-related
 // section heading in the README or CONTRIBUTING guide.

@@ -39,8 +39,8 @@ type Payload struct {
 
 // BinaryAnalysis holds information about binaries found in the repo
 type BinaryAnalysis struct {
-	Suspected    []string // OSPS-QA-05.01: suspected executable binary artifacts
-	Unreviewable []string // OSPS-QA-05.02: unreviewable binary artifacts
+	Suspected    []string // suspected executable binary artifacts
+	Unreviewable []string // unreviewable binary artifacts
 	Err          error
 }
 

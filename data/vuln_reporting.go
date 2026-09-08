@@ -68,7 +68,7 @@ func (r *RestData) getPrivateVulnReporting() {
 // loadSecurityPolicy locates SECURITY.md and, when present, fetches its content.
 // Presence alone is answered from already-cached directory listings; the content
 // fetch is the only added API call, and it happens only when the file exists so
-// that its body can back the SECURITY.md contact fallback in OSPS-VM-02.
+// that its body can back the SECURITY.md contact fallback.
 func (r *RestData) loadSecurityPolicy() {
 	path := r.checkFile("security.md")
 	if path == "" {
@@ -99,7 +99,7 @@ type securityAdvisory struct {
 // getSecurityAdvisories queries the repository security advisories endpoint for
 // published advisories and records how many were found on RestData. A published
 // GitHub Security Advisory (GHSA) is public evidence that the project publishes
-// data about discovered vulnerabilities (OSPS-VM-04.01).
+// data about discovered vulnerabilities.
 //
 // Any failure — including the 403/404 GitHub returns when the advisory database
 // is unavailable for a repository or the token lacks access — leaves Known false

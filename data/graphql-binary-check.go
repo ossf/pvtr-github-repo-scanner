@@ -72,7 +72,7 @@ type binaryChecker struct {
 	branch     string
 }
 
-// check determines whether a file is a suspected executable binary per OSPS-QA-05.01.
+// check determines whether a file is a suspected executable binary artifact.
 // It uses GitHub's IsBinary field combined with Unix execute permission bits to identify
 // generated executable artifacts. Non-executable binaries (e.g. images) are not flagged.
 func (bc *binaryChecker) check(isBinaryPtr *bool, isTruncated bool, path string, mode int) (bool, error) {
@@ -85,12 +85,12 @@ func (bc *binaryChecker) check(isBinaryPtr *bool, isTruncated bool, path string,
 			// Git only uses mode 100755 for executables, but the bitwise check is more
 			// robust against non-standard modes from other Git implementations.
 			// Non-executable binaries (e.g. PNG, PDF) are not "generated executable artifacts"
-			// per OSPS-QA-05.01 and should not be flagged.
+			// and should not be flagged.
 			return false, nil
 		}
 		// File is binary with an execute bit set. Acceptable binary formats (images,
-		// audio, video, fonts, documents) are not "generated executable artifacts" per
-		// OSPS-QA-05.01 even when a stray execute bit is present — a common artifact of
+		// audio, video, fonts, documents) are not "generated executable artifacts"
+		// even when a stray execute bit is present — a common artifact of
 		// checkouts from filesystems without Unix permissions — so they are not flagged.
 		if acceptableBinaryExtension(path) {
 			return false, nil
@@ -205,7 +205,7 @@ func commonAcceptableFileExtension(path string) bool {
 // acceptableBinaryExtension returns true for binary file types that are considered
 // reviewable or acceptable in a repository, such as images, audio, video, fonts,
 // documents, and design-tool source files.
-// These are excluded from OSPS-QA-05.02 "unreviewable binary artifacts" checks.
+// These are excluded from "unreviewable binary artifacts" checks.
 func acceptableBinaryExtension(path string) bool {
 	ext := fileExtension(path)
 	if ext == "" {
@@ -229,8 +229,8 @@ func acceptableBinaryExtension(path string) bool {
 	return slices.Contains(extensions, ext)
 }
 
-// checkUnreviewable determines whether a file is an unreviewable binary artifact
-// per OSPS-QA-05.02. Unlike check(), which only flags executable binaries,
+// checkUnreviewable determines whether a file is an unreviewable binary artifact.
+// Unlike check(), which only flags executable binaries,
 // this flags all binary files except those with acceptable extensions (images,
 // audio, video, fonts, documents, design assets) that are legitimately stored
 // in binary format.
@@ -322,7 +322,7 @@ func walkTree(tree *GraphqlRepoTree, fn blobCheckFn) (flagged []string, err erro
 }
 
 // checkTreeForUnreviewableBinaries returns file names that are unreviewable binary
-// artifacts (OSPS-QA-05.02), excluding acceptable formats like images, audio, and fonts.
+// artifacts, excluding acceptable formats like images, audio, and fonts.
 func checkTreeForUnreviewableBinaries(tree *GraphqlRepoTree, bc *binaryChecker) ([]string, error) {
 	return walkTree(tree, func(isBinary *bool, isTruncated bool, path string, _ int) (bool, error) {
 		return bc.checkUnreviewable(isBinary, isTruncated, path)

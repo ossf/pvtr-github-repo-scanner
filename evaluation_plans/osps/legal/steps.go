@@ -172,7 +172,7 @@ func releaseLabel(release data.ReleaseData) string {
 }
 
 // ReleasesLicensed assesses whether released software assets include their
-// license (OSPS-LE-03.02, and the license-presence half of OSPS-LE-02.02).
+// license.
 //
 // The assessment is scoped to the latest published release, which reflects the
 // project's current licensing posture. Two release-time hazards drive the
