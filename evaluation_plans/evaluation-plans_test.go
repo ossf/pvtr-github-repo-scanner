@@ -49,9 +49,13 @@ func TestAllSteps(t *testing.T) {
 // reuse it (see #448); the correspondence still has to be asserted somewhere, so
 // it is asserted here rather than compiled into the step packages.
 var aiAssistedBehaviorRequirements = map[string]string{
-	"workflow-job-permissions":     "OSPS-AC-04.02",
-	"test-execution-documentation": "OSPS-QA-06.02",
-	"test-maintenance-policy":      "OSPS-QA-06.03",
+	"design-documentation-coverage":             "OSPS-SA-01.01",
+	"external-interface-documentation-coverage": "OSPS-SA-02.01",
+	"security-assessment-adequacy":              "OSPS-SA-03.01",
+	"test-execution-documentation":              "OSPS-QA-06.02",
+	"test-maintenance-policy":                   "OSPS-QA-06.03",
+	"threat-modeling-coverage":                  "OSPS-SA-03.02",
+	"workflow-job-permissions":                  "OSPS-AC-04.02",
 }
 
 // TestAIAssistedBehaviorsMapToRequirements asserts every prompt in the prompt

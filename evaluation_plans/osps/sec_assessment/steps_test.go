@@ -164,7 +164,11 @@ func Test_HasDesignDocumentation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotResult, gotMsg, _ := HasDesignDocumentation(tt.payload)
+			// Every case here exercises the design-documentation detection
+			// logic, which is only reached once a release exists. The
+			// applicability gate itself is covered by
+			// Test_HasDesignDocumentationAppliesOnlyAfterRelease.
+			gotResult, gotMsg, _ := HasDesignDocumentation(withPublishedRelease(tt.payload))
 			if gotResult != tt.wantResult {
 				t.Errorf("HasDesignDocumentation() result = %v, want %v", gotResult, tt.wantResult)
 			}
@@ -173,6 +177,60 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func withPublishedRelease(payload data.Payload) data.Payload {
+	if payload.RestData == nil {
+		payload.RestData = &data.RestData{}
+	}
+	payload.Releases = []data.ReleaseData{{TagName: "v1.0.0"}}
+	return payload
+}
+
+// Test_HasDesignDocumentationAppliesOnlyAfterRelease covers the applicability
+// gate the catalog states ("When the project has made a release") and that the
+// other three controls in this group already applied.
+func Test_HasDesignDocumentationAppliesOnlyAfterRelease(t *testing.T) {
+	designDocs := buildGraphqlDataWithFiles([]string{"architecture.md"})
+
+	t.Run("release data unavailable needs review", func(t *testing.T) {
+		result, msg, confidence := HasDesignDocumentation(data.Payload{GraphqlRepoData: designDocs})
+		if result != gemara.NeedsReview {
+			t.Errorf("result = %v, want NeedsReview", result)
+		}
+		if msg != "Release data is unavailable; manually review whether the documentation includes design documentation" {
+			t.Errorf("unexpected message %q", msg)
+		}
+		if confidence != gemara.Low {
+			t.Errorf("confidence = %v, want Low", confidence)
+		}
+	})
+
+	t.Run("no published release is not applicable", func(t *testing.T) {
+		result, msg, confidence := HasDesignDocumentation(data.Payload{
+			GraphqlRepoData: designDocs,
+			RestData:        &data.RestData{},
+		})
+		if result != gemara.NotApplicable {
+			t.Errorf("result = %v, want NotApplicable", result)
+		}
+		if msg != "No published releases found; the design documentation requirement does not apply" {
+			t.Errorf("unexpected message %q", msg)
+		}
+		if confidence != gemara.High {
+			t.Errorf("confidence = %v, want High", confidence)
+		}
+	})
+
+	t.Run("draft release alone is not applicable", func(t *testing.T) {
+		result, _, _ := HasDesignDocumentation(data.Payload{
+			GraphqlRepoData: designDocs,
+			RestData:        &data.RestData{Releases: []data.ReleaseData{{TagName: "v1.0.0", Draft: true}}},
+		})
+		if result != gemara.NotApplicable {
+			t.Errorf("result = %v, want NotApplicable", result)
+		}
+	})
 }
 
 // buildGraphqlDataWithFiles is a helper to create GraphqlRepoData with specified files

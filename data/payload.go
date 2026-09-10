@@ -58,10 +58,11 @@ type BinaryAnalysis struct {
 type payloadCache struct {
 	workflows []WorkflowFile
 	// set once workflows have been fetched, so an empty result is not refetched
-	workflowsLoaded     bool
-	documentation       []DocumentationFile
-	documentationErr    error
-	documentationLoaded bool
+	workflowsLoaded       bool
+	documentation         []DocumentationFile
+	documentationErr      error
+	documentationLoaded   bool
+	declaredDocumentation map[string]declaredDocumentationResult
 	// refLicenses caches LicenseAtRef lookups by ref. More than one control
 	// evaluates the latest release's license, so without this the same
 	// endpoint would be hit once per control.
