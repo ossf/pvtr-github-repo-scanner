@@ -1,6 +1,7 @@
 package sec_assessment
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -9,7 +10,14 @@ import (
 	"github.com/ossf/pvtr-github-repo-scanner/data"
 	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 	"github.com/ossf/si-tooling/v2/si"
+	sdkai "github.com/privateerproj/privateer-sdk/ai"
 )
+
+const maxSecurityAssessmentEvidenceBytes = 64 * 1024
+
+var newAIClientFromConfig = sdkai.NewClient
+var loadSecurityAssessmentEvidence = securityAssessmentEvidence
+var loadDeclaredDocumentation = (*data.Payload).GetDeclaredDocumentation
 
 // DesignDocFiles are common file names for design/architecture documentation
 var DesignDocFiles = []string{
@@ -31,7 +39,19 @@ var DesignDocDirectories = []string{
 	"doc",
 }
 
+// HasDesignDocumentation assesses whether a project that has made a release
+// documents the design of the system, demonstrating its actions and actors.
 func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	// The requirement only applies once a release exists, matching the other
+	// controls in this group.
+	released, observable := reusable_steps.HasPublishedRelease(payload)
+	if !observable {
+		return gemara.NeedsReview, "Release data is unavailable; manually review whether the documentation includes design documentation", gemara.Low
+	}
+	if !released {
+		return gemara.NotApplicable, "No published releases found; the design documentation requirement does not apply", gemara.High
+	}
+
 	var foundDirectories []string
 
 	// Check for design documentation files and directories in repository root
@@ -41,7 +61,15 @@ func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message
 			if entry.Type == "blob" {
 				for _, designFile := range DesignDocFiles {
 					if strings.EqualFold(entry.Name, designFile) {
-						return gemara.Passed, "Design documentation found: " + entry.Name, confidence
+						// A matching filename shows a design document exists but
+						// says nothing about what it contains, so grading its
+						// content can still overturn this.
+						return gradeSecurityAssessmentDocumentation(
+							payload,
+							"OSPS-SA-01.01",
+							"design-documentation-coverage",
+							securityAssessmentVerdict{gemara.Passed, "Design documentation found: " + entry.Name, gemara.Low},
+						)
 					}
 				}
 			}
@@ -59,15 +87,41 @@ func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message
 
 	// If we found directories that typically contain design docs, flag for manual review
 	if len(foundDirectories) > 0 {
-		return gemara.NeedsReview, "No design documentation file found in root, but found directories that may contain design documentation: " + strings.Join(foundDirectories, ", ") + " - manual review needed", confidence
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-01.01",
+			"design-documentation-coverage",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				"No design documentation file found in root, but found directories that may contain design documentation: " + strings.Join(foundDirectories, ", ") + " - manual review needed",
+				gemara.Low,
+			},
+		)
 	}
 
 	// Fallback: check if DetailedGuide is specified in Security Insights
-	if payload.RestData != nil && payload.Insights.Project.Documentation.DetailedGuide != nil {
-		return gemara.NeedsReview, "No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors", confidence
+	if payload.RestData != nil &&
+		payload.Insights.Project != nil &&
+		payload.Insights.Project.Documentation != nil &&
+		payload.Insights.Project.Documentation.DetailedGuide != nil {
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-01.01",
+			"design-documentation-coverage",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				"No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors",
+				gemara.Low,
+			},
+		)
 	}
 
-	return gemara.Failed, "Design documentation demonstrating all actions and actors was NOT found", confidence
+	return gradeSecurityAssessmentDocumentation(
+		payload,
+		"OSPS-SA-01.01",
+		"design-documentation-coverage",
+		securityAssessmentVerdict{gemara.Failed, "Design documentation demonstrating all actions and actors was NOT found", gemara.Medium},
+	)
 }
 
 // InterfaceDocFiles are common file names for external interface / API documentation.
@@ -132,7 +186,16 @@ func HasExternalInterfaceDocumentation(payload data.Payload) (result gemara.Resu
 						// A matching root filename indicates interface docs likely
 						// exist, but does not prove they cover every external
 						// interface of the released assets.
-						return gemara.NeedsReview, "External interface documentation found (" + entry.Name + "), but coverage of all external interfaces requires manual review", gemara.Low
+						return gradeSecurityAssessmentDocumentation(
+							payload,
+							"OSPS-SA-02.01",
+							"external-interface-documentation-coverage",
+							securityAssessmentVerdict{
+								gemara.NeedsReview,
+								"External interface documentation found (" + entry.Name + "), but coverage of all external interfaces requires manual review",
+								gemara.Low,
+							},
+						)
 					}
 				}
 			}
@@ -150,23 +213,59 @@ func HasExternalInterfaceDocumentation(payload data.Payload) (result gemara.Resu
 	// A directory that typically holds API docs is a weaker signal that still
 	// cannot be confirmed to document every interface.
 	if len(foundDirectories) > 0 {
-		return gemara.NeedsReview, "No external interface documentation file found in root, but found directories that may contain API documentation: " + strings.Join(foundDirectories, ", ") + " - manual review needed to confirm all external interfaces are documented", gemara.Low
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-02.01",
+			"external-interface-documentation-coverage",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				"No external interface documentation file found in root, but found directories that may contain API documentation: " + strings.Join(foundDirectories, ", ") + " - manual review needed to confirm all external interfaces are documented",
+				gemara.Low,
+			},
+		)
 	}
 
 	// Fallback: a detailed or quickstart guide in Security Insights may describe
 	// the interfaces, but this cannot be verified automatically.
 	if payload.RestData != nil && payload.Insights.Project != nil && payload.Insights.Project.Documentation != nil {
 		if payload.Insights.Project.Documentation.DetailedGuide != nil {
-			return gemara.NeedsReview, "No external interface documentation file or directory found, but detailed guide specified in Security Insights - manual review needed to confirm all external interfaces are documented", gemara.Low
+			return gradeSecurityAssessmentDocumentation(
+				payload,
+				"OSPS-SA-02.01",
+				"external-interface-documentation-coverage",
+				securityAssessmentVerdict{
+					gemara.NeedsReview,
+					"No external interface documentation file or directory found, but detailed guide specified in Security Insights - manual review needed to confirm all external interfaces are documented",
+					gemara.Low,
+				},
+			)
 		}
 		if payload.Insights.Project.Documentation.QuickstartGuide != nil {
-			return gemara.NeedsReview, "No external interface documentation file or directory found, but quickstart guide specified in Security Insights - manual review needed to confirm all external interfaces are documented", gemara.Low
+			return gradeSecurityAssessmentDocumentation(
+				payload,
+				"OSPS-SA-02.01",
+				"external-interface-documentation-coverage",
+				securityAssessmentVerdict{
+					gemara.NeedsReview,
+					"No external interface documentation file or directory found, but quickstart guide specified in Security Insights - manual review needed to confirm all external interfaces are documented",
+					gemara.Low,
+				},
+			)
 		}
 	}
 
 	// No interface-doc file, API-doc directory, or Security Insights guide was
 	// found for a released project, so the MUST requirement is unmet.
-	return gemara.Failed, "No documentation file, API-documentation directory, or Security Insights guide describing the external software interfaces of released assets was found", gemara.Medium
+	return gradeSecurityAssessmentDocumentation(
+		payload,
+		"OSPS-SA-02.01",
+		"external-interface-documentation-coverage",
+		securityAssessmentVerdict{
+			gemara.Failed,
+			"No documentation file, API-documentation directory, or Security Insights guide describing the external software interfaces of released assets was found",
+			gemara.Medium,
+		},
+	)
 }
 
 // threatModelingIndicators are lowercase phrases that signal a security
@@ -297,7 +396,16 @@ func HasSecurityAssessment(payload data.Payload) (result gemara.Result, message 
 	if assessmentDeclared(assessments.Self) {
 		// A declaration proves only that an artifact exists, not that it identifies
 		// the most likely and impactful security problems.
-		return gemara.NeedsReview, "Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review", gemara.Low
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-03.01",
+			"security-assessment-adequacy",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				"Security Insights declares a self security assessment, but its coverage and sufficiency require manual or AI-assisted review",
+				gemara.Low,
+			},
+		)
 	}
 	populatedThirdParty := 0
 	for _, assessment := range assessments.ThirdPartyAssessment {
@@ -308,10 +416,28 @@ func HasSecurityAssessment(payload data.Payload) (result gemara.Result, message 
 	if populatedThirdParty > 0 {
 		// Third-party provenance does not establish that the assessment covers the
 		// risks required by this control.
-		return gemara.NeedsReview, fmt.Sprintf("Security Insights declares %d third-party security assessment(s), but their coverage and sufficiency require manual or AI-assisted review", populatedThirdParty), gemara.Low
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-03.01",
+			"security-assessment-adequacy",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				fmt.Sprintf("Security Insights declares %d third-party security assessment(s), but their coverage and sufficiency require manual or AI-assisted review", populatedThirdParty),
+				gemara.Low,
+			},
+		)
 	}
 
-	return gemara.Failed, "Project has published releases but no security assessment was found in Security Insights", gemara.Medium
+	return gradeSecurityAssessmentDocumentation(
+		payload,
+		"OSPS-SA-03.01",
+		"security-assessment-adequacy",
+		securityAssessmentVerdict{
+			gemara.Failed,
+			"Project has published releases but no security assessment was found in Security Insights",
+			gemara.Medium,
+		},
+	)
 }
 
 // HasThreatModelAnalysis assesses whether a project that has made a release has
@@ -344,15 +470,265 @@ func HasThreatModelAnalysis(payload data.Payload) (result gemara.Result, message
 		if mentionsThreatModeling(assessment) {
 			// Matching terminology proves an artifact is declared, but not that it
 			// sufficiently covers critical paths, interactions, threats, and mitigations.
-			return gemara.NeedsReview, "Security Insights declares threat modeling or attack surface analysis, but its coverage and sufficiency require manual or AI-assisted review", gemara.Low
+			return gradeSecurityAssessmentDocumentation(
+				payload,
+				"OSPS-SA-03.02",
+				"threat-modeling-coverage",
+				securityAssessmentVerdict{
+					gemara.NeedsReview,
+					"Security Insights declares threat modeling or attack surface analysis, but its coverage and sufficiency require manual or AI-assisted review",
+					gemara.Low,
+				},
+			)
 		}
 	}
 
 	if hasAssessment {
 		// Security Insights has no dedicated threat-model field, so an assessment
 		// without recognized terminology may still contain the required analysis.
-		return gemara.NeedsReview, "A security assessment is declared but does not mention threat modeling or attack surface analysis - manual review needed", gemara.Low
+		return gradeSecurityAssessmentDocumentation(
+			payload,
+			"OSPS-SA-03.02",
+			"threat-modeling-coverage",
+			securityAssessmentVerdict{
+				gemara.NeedsReview,
+				"A security assessment is declared but does not mention threat modeling or attack surface analysis - manual review needed",
+				gemara.Low,
+			},
+		)
 	}
 
-	return gemara.Failed, "Project has published releases but no threat modeling or attack surface analysis was found in Security Insights", gemara.Medium
+	return gradeSecurityAssessmentDocumentation(
+		payload,
+		"OSPS-SA-03.02",
+		"threat-modeling-coverage",
+		securityAssessmentVerdict{
+			gemara.Failed,
+			"Project has published releases but no threat modeling or attack surface analysis was found in Security Insights",
+			gemara.Medium,
+		},
+	)
+}
+
+type securityAssessmentDocument struct {
+	Path      string `json:"path"`
+	SourceURL string `json:"source_url"`
+	Content   string `json:"content"`
+}
+
+type securityAssessmentDeclaration struct {
+	Name     string `json:"name,omitempty"`
+	Comment  string `json:"comment,omitempty"`
+	Evidence string `json:"evidence_url,omitempty"`
+}
+
+type securityInsightsAIEvidence struct {
+	DetailedGuide         string                          `json:"detailed_guide_url,omitempty"`
+	QuickstartGuide       string                          `json:"quickstart_guide_url,omitempty"`
+	SelfAssessment        *securityAssessmentDeclaration  `json:"self_assessment,omitempty"`
+	ThirdPartyAssessments []securityAssessmentDeclaration `json:"third_party_assessments,omitempty"`
+}
+
+type securityAssessmentAIEvidence struct {
+	Documentation    []securityAssessmentDocument `json:"documentation"`
+	SecurityInsights securityInsightsAIEvidence   `json:"security_insights"`
+	Collection       evidenceCollectionMetadata   `json:"collection"`
+}
+
+type evidenceCollectionMetadata struct {
+	Complete bool   `json:"complete"`
+	Scope    string `json:"scope"`
+}
+
+const evidenceCollectionScope = "Only same-repository text files explicitly linked by the relevant Security Insights declarations, at each URL's declared ref. No repository-wide discovery, external documents, PDFs, or links within those files were retrieved. Complete means the selected declarations were retrieved, not that the project's documentation is exhaustive or current."
+
+// securityAssessmentVerdict is what a deterministic branch concluded before any
+// AI grading.
+type securityAssessmentVerdict struct {
+	result     gemara.Result
+	message    string
+	confidence gemara.ConfidenceLevel
+}
+
+// gradeSecurityAssessmentDocumentation asks the configured model to grade the
+// artifacts declared by Security Insights. No AI configuration or no relevant
+// declaration preserves the deterministic verdict; unreviewable declarations
+// and AI failures defer to manual review.
+func gradeSecurityAssessmentDocumentation(
+	payload data.Payload,
+	controlID string,
+	behavior string,
+	deterministic securityAssessmentVerdict,
+) (gemara.Result, string, gemara.ConfidenceLevel) {
+	if payload.Config == nil {
+		return deterministic.result, deterministic.message, deterministic.confidence
+	}
+
+	client, clientErr := newAIClientFromConfig(*payload.Config)
+	if clientErr == nil && client == nil {
+		return deterministic.result, deterministic.message, deterministic.confidence
+	}
+	if clientErr != nil {
+		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI client construction failed", clientErr)
+	}
+
+	material, sources, err := loadSecurityAssessmentEvidence(payload, behavior)
+	if err != nil {
+		return reusable_steps.AIFallback(payload, controlID, "Security Insights-declared evidence could not be fully reviewed; manual review is required", "unable to gather security assessment evidence", err)
+	}
+	if material == "" {
+		return deterministic.result, deterministic.message, deterministic.confidence
+	}
+
+	response, aiEvidence, err := reusable_steps.RunAIAssessment(client, behavior, material)
+	if err != nil {
+		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI assessment failed", err)
+	}
+	if err := reusable_steps.ValidateAIResponse(response); err != nil {
+		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI response did not conform to the expected verdict schema", err)
+	}
+
+	if len(sources) > 0 {
+		aiEvidence.Description = fmt.Sprintf("AI Assisted Review of %s", strings.Join(sources, ", "))
+	}
+	payload.AddEvidence(aiEvidence)
+	if behavior == "external-interface-documentation-coverage" && response.GemaraResult() == gemara.Passed {
+		return gemara.NeedsReview, "[AI-Assisted] External interface coverage requires human confirmation; the model's pass recommendation and analysis are retained in the AI evidence", gemara.Low
+	}
+	return response.GemaraResult(), response.Summary(), securityAssessmentConfidence(behavior, response)
+}
+
+// Confidence reflects the evidence, not the model's certainty about its verdict.
+// Review deferrals lack sufficient evidence, and documentary coverage claims
+// cannot establish completeness against an independently observed inventory.
+func securityAssessmentConfidence(behavior string, response sdkai.Response) gemara.ConfidenceLevel {
+	if response.GemaraResult() == gemara.NeedsReview {
+		return gemara.Low
+	}
+	confidence := response.GemaraConfidence()
+	if behavior != "design-documentation-coverage" {
+		return confidence
+	}
+	if response.GemaraResult() == gemara.Passed && confidence == gemara.High {
+		return gemara.Medium
+	}
+	return confidence
+}
+
+// securityAssessmentEvidence retrieves only explicitly declared artifacts. If
+// any selected evidence is unavailable, do not ask the model to judge a subset.
+func securityAssessmentEvidence(payload data.Payload, behavior string) (string, []string, error) {
+	if payload.RestData == nil {
+		return "", nil, fmt.Errorf("payload missing required repository data")
+	}
+	if payload.InsightsError {
+		return "", nil, fmt.Errorf("security insights could not be parsed")
+	}
+	declarations, urls, err := declaredEvidenceURLs(payload.Insights, behavior)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(urls) == 0 {
+		return "", nil, nil
+	}
+	packet := securityAssessmentAIEvidence{
+		SecurityInsights: declarations,
+		Collection:       evidenceCollectionMetadata{Complete: true, Scope: evidenceCollectionScope},
+	}
+	const maxDeclaredDocuments = 16
+	if len(urls) > maxDeclaredDocuments {
+		return "", nil, fmt.Errorf("declared evidence exceeds the limit of %d documents", maxDeclaredDocuments)
+	}
+	var material []byte
+	for _, source := range urls {
+		file, err := loadDeclaredDocumentation(&payload, source)
+		if err != nil {
+			return "", nil, fmt.Errorf("unable to retrieve declared evidence: %w", err)
+		}
+		packet.Documentation = append(packet.Documentation, securityAssessmentDocument{
+			Path: file.Path, SourceURL: source, Content: file.Content,
+		})
+		if material, err = json.Marshal(packet); err != nil {
+			return "", nil, fmt.Errorf("marshal security assessment evidence: %w", err)
+		}
+		if len(material) > maxSecurityAssessmentEvidenceBytes {
+			return "", nil, fmt.Errorf("declared evidence exceeds the %d-byte packet limit", maxSecurityAssessmentEvidenceBytes)
+		}
+	}
+	return string(material), urls, nil
+}
+
+func declaredEvidenceURLs(insights si.SecurityInsights, behavior string) (securityInsightsAIEvidence, []string, error) {
+	var evidence securityInsightsAIEvidence
+	var urls []string
+	addURL := func(value string) {
+		if value == "" {
+			return
+		}
+		for _, existing := range urls {
+			if existing == value {
+				return
+			}
+		}
+		urls = append(urls, value)
+	}
+	switch behavior {
+	case "design-documentation-coverage", "external-interface-documentation-coverage":
+		if insights.Project != nil && insights.Project.Documentation != nil {
+			evidence.DetailedGuide = siURL(insights.Project.Documentation.DetailedGuide)
+			addURL(evidence.DetailedGuide)
+			if behavior == "external-interface-documentation-coverage" {
+				evidence.QuickstartGuide = siURL(insights.Project.Documentation.QuickstartGuide)
+				addURL(evidence.QuickstartGuide)
+			}
+		}
+	case "security-assessment-adequacy", "threat-modeling-coverage":
+		if insights.Repository == nil {
+			break
+		}
+		assessments := insights.Repository.SecurityPosture.Assessments
+		evidence.SelfAssessment = aiAssessmentDeclaration(assessments.Self)
+		declarations := []*securityAssessmentDeclaration{evidence.SelfAssessment}
+		for _, assessment := range assessments.ThirdPartyAssessment {
+			if declaration := aiAssessmentDeclaration(assessment); declaration != nil {
+				evidence.ThirdPartyAssessments = append(evidence.ThirdPartyAssessments, *declaration)
+				declarations = append(declarations, declaration)
+			}
+		}
+		for _, declaration := range declarations {
+			if declaration == nil {
+				continue
+			}
+			if declaration.Evidence == "" {
+				return evidence, nil, fmt.Errorf("security insights declares an assessment without a retrievable evidence URL")
+			}
+			addURL(declaration.Evidence)
+		}
+	default:
+		return evidence, nil, fmt.Errorf("unknown security assessment behavior %q", behavior)
+	}
+	return evidence, urls, nil
+}
+
+func aiAssessmentDeclaration(assessment si.Assessment) *securityAssessmentDeclaration {
+	declaration := securityAssessmentDeclaration{
+		Comment: strings.TrimSpace(assessment.Comment),
+	}
+	if assessment.Name != nil {
+		declaration.Name = strings.TrimSpace(*assessment.Name)
+	}
+	if assessment.Evidence != nil {
+		declaration.Evidence = strings.TrimSpace(string(*assessment.Evidence))
+	}
+	if declaration.Name == "" && declaration.Comment == "" && declaration.Evidence == "" {
+		return nil
+	}
+	return &declaration
+}
+
+func siURL(value *si.URL) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(string(*value))
 }
