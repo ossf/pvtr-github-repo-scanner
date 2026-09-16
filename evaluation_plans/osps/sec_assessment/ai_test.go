@@ -165,9 +165,13 @@ func TestSecurityAssessmentAIFailuresNeedReview(t *testing.T) {
 		fetchErr    error
 		providerErr error
 		body        string
+		// gatherFail marks a case where declared evidence cannot be retrieved;
+		// enabling AI must then preserve the deterministic verdict rather than
+		// demoting it to NeedsReview.
+		gatherFail bool
 	}{
 		{name: "configuration", factoryErr: errors.New("invalid AI configuration")},
-		{name: "unavailable declared artifact", fetchErr: errors.New("unsupported or unavailable document")},
+		{name: "unavailable declared artifact", fetchErr: errors.New("unsupported or unavailable document"), gatherFail: true},
 		{name: "provider", providerErr: errors.New("provider unavailable")},
 		{name: "malformed JSON", body: "not JSON"},
 		{name: "missing confidence", body: `{"result":"pass","message":"m","explanation":"e"}`},
@@ -175,6 +179,9 @@ func TestSecurityAssessmentAIFailuresNeedReview(t *testing.T) {
 		{name: "missing explanation", body: `{"result":"pass","confidence":"high","message":"m"}`},
 	}
 	for _, control := range securityAssessmentControls {
+		detPayload := declaredPayload()
+		detPayload.Config = nil
+		detResult, detMessage, detConfidence := control.assess(detPayload)
 		for _, test := range tests {
 			t.Run(control.behavior+"/"+test.name, func(t *testing.T) {
 				fetches := 0
@@ -186,9 +193,15 @@ func TestSecurityAssessmentAIFailuresNeedReview(t *testing.T) {
 				stubAIClientFactory(t, client, test.factoryErr)
 				payload := declaredPayload()
 				result, message, confidence := control.assess(payload)
-				assert.Equal(t, gemara.NeedsReview, result)
-				assert.Equal(t, gemara.Low, confidence)
-				assert.NotEmpty(t, message)
+				if test.gatherFail {
+					assert.Equal(t, detResult, result, "ungatherable declared evidence preserves the deterministic verdict")
+					assert.Equal(t, detMessage, message)
+					assert.Equal(t, detConfidence, confidence)
+				} else {
+					assert.Equal(t, gemara.NeedsReview, result)
+					assert.Equal(t, gemara.Low, confidence)
+					assert.NotEmpty(t, message)
+				}
 				assert.Empty(t, payload.GetEvidence())
 				if test.factoryErr != nil {
 					assert.Zero(t, fetches)
@@ -206,14 +219,24 @@ func TestSecurityAssessmentAIResultMapping(t *testing.T) {
 		return data.DocumentationFile{Path: "review.md", Content: "declared artifact"}, nil
 	})
 	for _, control := range securityAssessmentControls {
-		for name, result := range map[string]gemara.Result{"fail": gemara.Failed, "needs_review": gemara.NeedsReview} {
+		detPayload := declaredPayload()
+		detPayload.Config = nil
+		detResult, _, detConfidence := control.assess(detPayload)
+		for name, aiResult := range map[string]gemara.Result{"fail": gemara.Failed, "needs_review": gemara.NeedsReview} {
 			t.Run(control.behavior+"/"+name, func(t *testing.T) {
 				client := &securityAssessmentAIClient{body: fmt.Sprintf(
 					`{"result":%q,"confidence":"low","message":"m","explanation":"e","citations":[]}`, name)}
 				stubAIClientFactory(t, client, nil)
 				got, _, confidence := control.assess(declaredPayload())
-				assert.Equal(t, result, got)
-				assert.Equal(t, gemara.Low, confidence)
+				if detResult == gemara.Passed {
+					// The AI graded a declared artifact that is not the one the
+					// deterministic Passed relied on, so it cannot lower the grade.
+					assert.Equal(t, gemara.Passed, got)
+					assert.Equal(t, detConfidence, confidence)
+				} else {
+					assert.Equal(t, aiResult, got)
+					assert.Equal(t, gemara.Low, confidence)
+				}
 			})
 		}
 	}
@@ -224,12 +247,98 @@ func TestSecurityAssessmentReviewConfidenceIsLow(t *testing.T) {
 		return data.DocumentationFile{Path: "review.md", Content: "declared artifact"}, nil
 	})
 	for _, control := range securityAssessmentControls {
+		detPayload := declaredPayload()
+		detPayload.Config = nil
+		detResult, _, detConfidence := control.assess(detPayload)
 		t.Run(control.behavior, func(t *testing.T) {
 			client := &securityAssessmentAIClient{body: `{"result":"needs_review","confidence":"high","message":"Evidence is insufficient","explanation":"The document does not establish the required coverage.","citations":[]}`}
 			stubAIClientFactory(t, client, nil)
 			result, _, confidence := control.assess(declaredPayload())
-			assert.Equal(t, gemara.NeedsReview, result)
-			assert.Equal(t, gemara.Low, confidence)
+			if detResult == gemara.Passed {
+				assert.Equal(t, gemara.Passed, result, "an AI deferral cannot lower a deterministic Passed")
+				assert.Equal(t, detConfidence, confidence)
+			} else {
+				assert.Equal(t, gemara.NeedsReview, result)
+				assert.Equal(t, gemara.Low, confidence)
+			}
+		})
+	}
+}
+
+// TestDenialCommentPreservesDeterministicFailed covers H1: a self-assessment
+// whose comment denies that an assessment was performed must not be treated as a
+// gradeable declaration, so the deterministic Failed survives with AI enabled.
+func TestDenialCommentPreservesDeterministicFailed(t *testing.T) {
+	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+		t.Fatal("a denial-only assessment declares no evidence to fetch")
+		return data.DocumentationFile{}, nil
+	})
+	controls := []struct {
+		behavior string
+		assess   func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel)
+	}{
+		{"security-assessment-adequacy", HasSecurityAssessment},
+		{"threat-modeling-coverage", HasThreatModelAnalysis},
+	}
+	for _, control := range controls {
+		t.Run(control.behavior, func(t *testing.T) {
+			client := &securityAssessmentAIClient{body: passBody}
+			stubAIClientFactory(t, client, nil)
+			payload := declaredPayload()
+			payload.Insights.Repository.SecurityPosture.Assessments.Self = si.Assessment{
+				Comment: "No self assessment has been completed",
+			}
+			payload.Insights.Repository.SecurityPosture.Assessments.ThirdPartyAssessment = nil
+			result, _, confidence := control.assess(payload)
+			assert.Equal(t, gemara.Failed, result)
+			assert.Equal(t, gemara.Medium, confidence)
+			assert.Zero(t, client.calls)
+			assert.Empty(t, payload.GetEvidence())
+		})
+	}
+}
+
+// TestAIDoesNotDowngradeDeterministicPass covers H2: a successful AI fail on the
+// declared guide still records advisory evidence but does not lower the
+// deterministic design Passed earned from a root architecture.md.
+func TestAIDoesNotDowngradeDeterministicPass(t *testing.T) {
+	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+		return data.DocumentationFile{Path: "docs/design.md", Content: "shallow guide"}, nil
+	})
+	client := &securityAssessmentAIClient{body: `{"result":"fail","confidence":"high","message":"Guide is shallow","explanation":"The declared guide does not cover the design.","citations":[]}`}
+	stubAIClientFactory(t, client, nil)
+	payload := declaredPayload()
+	result, message, confidence := HasDesignDocumentation(payload)
+	assert.Equal(t, gemara.Passed, result)
+	assert.Equal(t, "Design documentation found: architecture.md", message)
+	assert.Equal(t, gemara.Low, confidence)
+	assert.Equal(t, 1, client.calls, "the model is still consulted and its opinion recorded")
+	assert.Len(t, payload.GetEvidence(), 1, "AI analysis is retained even though it cannot lower the grade")
+}
+
+// TestMisconfiguredClientKeepsDeterministicWithoutDeclaration covers M2: a
+// misconfigured AI client must not turn repos with no relevant Security Insights
+// declaration into NeedsReview, because the model would never have been consulted.
+func TestMisconfiguredClientKeepsDeterministicWithoutDeclaration(t *testing.T) {
+	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+		t.Fatal("no declared evidence means no fetch")
+		return data.DocumentationFile{}, nil
+	})
+	for _, control := range securityAssessmentControls {
+		t.Run(control.behavior, func(t *testing.T) {
+			payload := declaredPayload()
+			payload.Insights = si.SecurityInsights{}
+			payload.Config = nil
+			wantResult, wantMessage, wantConfidence := control.assess(payload)
+			payload.Config = &sdkconfig.Config{}
+			client := &securityAssessmentAIClient{body: passBody}
+			stubAIClientFactory(t, client, errors.New("invalid AI configuration"))
+			result, message, confidence := control.assess(payload)
+			assert.Equal(t, wantResult, result)
+			assert.Equal(t, wantMessage, message)
+			assert.Equal(t, wantConfidence, confidence)
+			assert.Zero(t, client.calls)
+			assert.Empty(t, payload.GetEvidence())
 		})
 	}
 }

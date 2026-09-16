@@ -18,6 +18,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 		payload    data.Payload
 		wantResult gemara.Result
 		wantMsg    string
+		wantConf   gemara.ConfidenceLevel
 	}{
 		{
 			name: "nil data returns failed",
@@ -27,6 +28,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Failed,
 			wantMsg:    "Design documentation demonstrating all actions and actors was NOT found",
+			wantConf:   gemara.Medium,
 		},
 		{
 			name: "design doc file found",
@@ -36,6 +38,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Passed,
 			wantMsg:    "Design documentation found: " + DesignDocFiles[0],
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "design doc file found (case insensitive)",
@@ -45,6 +48,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Passed,
 			wantMsg:    "Design documentation found: " + strings.ToUpper(DesignDocFiles[1]),
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "no design file but DetailedGuide exists",
@@ -62,6 +66,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.NeedsReview,
 			wantMsg:    "No design documentation file found, but detailed guide specified in Security Insights - manual review needed to confirm design documentation with actions and actors",
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "no design file and no DetailedGuide",
@@ -77,6 +82,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Failed,
 			wantMsg:    "Design documentation demonstrating all actions and actors was NOT found",
+			wantConf:   gemara.Medium,
 		},
 		{
 			name: "directory named like design file should not match",
@@ -95,6 +101,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Failed,
 			wantMsg:    "Design documentation demonstrating all actions and actors was NOT found",
+			wantConf:   gemara.Medium,
 		},
 		{
 			name: "similar but non-matching file name should not match",
@@ -110,6 +117,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Failed,
 			wantMsg:    "Design documentation demonstrating all actions and actors was NOT found",
+			wantConf:   gemara.Medium,
 		},
 		{
 			name: "docs directory found - needs review",
@@ -122,6 +130,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.NeedsReview,
 			wantMsg:    "No design documentation file found in root, but found directories that may contain design documentation: docs - manual review needed",
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "architecture directory found - needs review",
@@ -134,6 +143,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.NeedsReview,
 			wantMsg:    "No design documentation file found in root, but found directories that may contain design documentation: architecture - manual review needed",
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "multiple design directories found - needs review",
@@ -147,6 +157,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.NeedsReview,
 			wantMsg:    "No design documentation file found in root, but found directories that may contain design documentation: docs, design - manual review needed",
+			wantConf:   gemara.Low,
 		},
 		{
 			name: "design file takes precedence over directory",
@@ -159,6 +170,7 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			},
 			wantResult: gemara.Passed,
 			wantMsg:    "Design documentation found: architecture.md",
+			wantConf:   gemara.Low,
 		},
 	}
 
@@ -168,12 +180,15 @@ func Test_HasDesignDocumentation(t *testing.T) {
 			// logic, which is only reached once a release exists. The
 			// applicability gate itself is covered by
 			// Test_HasDesignDocumentationAppliesOnlyAfterRelease.
-			gotResult, gotMsg, _ := HasDesignDocumentation(withPublishedRelease(tt.payload))
+			gotResult, gotMsg, gotConf := HasDesignDocumentation(withPublishedRelease(tt.payload))
 			if gotResult != tt.wantResult {
 				t.Errorf("HasDesignDocumentation() result = %v, want %v", gotResult, tt.wantResult)
 			}
 			if tt.wantMsg != "" && gotMsg != tt.wantMsg {
 				t.Errorf("HasDesignDocumentation() message = %q, want %q", gotMsg, tt.wantMsg)
+			}
+			if gotConf != tt.wantConf {
+				t.Errorf("HasDesignDocumentation() confidence = %v, want %v", gotConf, tt.wantConf)
 			}
 		})
 	}

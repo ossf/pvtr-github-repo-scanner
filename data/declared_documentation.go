@@ -96,7 +96,10 @@ func (r *RestData) getDeclaredDocumentation(rawURL string) (DocumentationFile, e
 	}
 	text := string(decoded)
 	if !utf8.ValidString(text) || strings.ContainsFunc(text, func(r rune) bool {
-		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+		// unicode.IsControl only covers the Cc category, so also reject the Cf
+		// (format) category: zero-width spaces, bidi overrides, and the tag block
+		// used to smuggle hidden-text prompt injection past a human reviewer.
+		return (unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t') || unicode.Is(unicode.Cf, r)
 	}) || (len(decoded) > 0 && !strings.HasPrefix(http.DetectContentType(decoded), "text/")) {
 		return DocumentationFile{}, errors.New("declared documentation is not UTF-8 text")
 	}
@@ -137,8 +140,20 @@ func parseDeclaredDocumentationURL(rawURL, owner, repo string) (ref, filePath st
 	if host == "github.com" && segments[2] != "blob" {
 		return "", "", errors.New("declared documentation GitHub URL must use /blob/<ref>/<path>")
 	}
-	ref = segments[refIndex]
-	filePath = strings.Join(segments[refIndex+1:], "/")
+	// GitHub's "Raw" button and blob URLs can carry a fully-qualified ref such as
+	// refs/heads/<branch> or refs/tags/<tag>; consume all three segments as the
+	// ref (the Contents API accepts fully-qualified refs) so the file path starts
+	// after it rather than being mis-split into "heads/<branch>/...".
+	refEnd := refIndex + 1
+	if segments[refIndex] == "refs" && len(segments) >= refIndex+3 &&
+		(segments[refIndex+1] == "heads" || segments[refIndex+1] == "tags") {
+		refEnd = refIndex + 3
+	}
+	if len(segments) < refEnd+1 {
+		return "", "", errors.New("declared documentation URL is missing a ref or file path")
+	}
+	ref = strings.Join(segments[refIndex:refEnd], "/")
+	filePath = strings.Join(segments[refEnd:], "/")
 	switch strings.ToLower(path.Ext(filePath)) {
 	case ".json", ".yaml", ".yml", ".proto":
 	default:

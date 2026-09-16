@@ -61,9 +61,10 @@ func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message
 			if entry.Type == "blob" {
 				for _, designFile := range DesignDocFiles {
 					if strings.EqualFold(entry.Name, designFile) {
-						// A matching filename shows a design document exists but
-						// says nothing about what it contains, so grading its
-						// content can still overturn this.
+						// A matching root filename shows a design document exists.
+						// Its content is not fetched here; any AI review grades the
+						// separately declared Security Insights guide and is recorded
+						// as advisory evidence, but cannot lower this Passed.
 						return gradeSecurityAssessmentDocumentation(
 							payload,
 							"OSPS-SA-01.01",
@@ -552,8 +553,12 @@ type securityAssessmentVerdict struct {
 
 // gradeSecurityAssessmentDocumentation asks the configured model to grade the
 // artifacts declared by Security Insights. No AI configuration or no relevant
-// declaration preserves the deterministic verdict; unreviewable declarations
-// and AI failures defer to manual review.
+// declaration preserves the deterministic verdict; ungatherable declared
+// evidence also preserves it, so enabling AI never produces a worse verdict than
+// the AI-disabled path. A successful AI verdict may resolve a deterministic
+// NeedsReview but may not downgrade a deterministic Passed, because the only
+// Passed reaching here (a root-file match) rests on an artifact the AI packet
+// never contains.
 func gradeSecurityAssessmentDocumentation(
 	payload data.Payload,
 	controlID string,
@@ -564,17 +569,34 @@ func gradeSecurityAssessmentDocumentation(
 		return deterministic.result, deterministic.message, deterministic.confidence
 	}
 
-	client, clientErr := newAIClientFromConfig(*payload.Config)
-	if clientErr == nil && client == nil {
+	// Decide whether there is declared evidence to grade without fetching, so an
+	// AI-disabled repo never triggers network access and a repo with no relevant
+	// declaration keeps its deterministic verdict even if the provider is
+	// misconfigured.
+	urls, selErr := declaredSecurityAssessmentURLs(payload, behavior)
+	if selErr != nil || len(urls) == 0 {
 		return deterministic.result, deterministic.message, deterministic.confidence
 	}
+
+	client, clientErr := newAIClientFromConfig(*payload.Config)
 	if clientErr != nil {
-		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI client construction failed", clientErr)
+		// There is material to grade and the operator asked for AI review, so a
+		// misconfigured client is a fatal deferral rather than a silent pass.
+		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review was requested but the AI client could not be constructed; manual review is required", "AI client construction failed", clientErr)
+	}
+	if client == nil {
+		return deterministic.result, deterministic.message, deterministic.confidence
 	}
 
 	material, sources, err := loadSecurityAssessmentEvidence(payload, behavior)
 	if err != nil {
-		return reusable_steps.AIFallback(payload, controlID, "Security Insights-declared evidence could not be fully reviewed; manual review is required", "unable to gather security assessment evidence", err)
+		// Declared evidence could not be gathered (rejected host, unsupported
+		// format, oversized packet, or unparseable Security Insights). Keep the
+		// deterministic verdict rather than demoting it to NeedsReview.
+		if payload.Config.Logger != nil {
+			payload.Config.Logger.Warn(controlID+": unable to gather declared security assessment evidence; using deterministic verdict", "err", err)
+		}
+		return deterministic.result, deterministic.message, deterministic.confidence
 	}
 	if material == "" {
 		return deterministic.result, deterministic.message, deterministic.confidence
@@ -582,10 +604,10 @@ func gradeSecurityAssessmentDocumentation(
 
 	response, aiEvidence, err := reusable_steps.RunAIAssessment(client, behavior, material)
 	if err != nil {
-		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI assessment failed", err)
+		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review of the declared evidence did not complete; manual review is required", "AI assessment failed", err)
 	}
 	if err := reusable_steps.ValidateAIResponse(response); err != nil {
-		return reusable_steps.AIFallback(payload, controlID, deterministic.message, "AI response did not conform to the expected verdict schema", err)
+		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review returned a response that did not conform to the expected verdict schema; manual review is required", "AI response did not conform to the expected verdict schema", err)
 	}
 
 	if len(sources) > 0 {
@@ -595,12 +617,20 @@ func gradeSecurityAssessmentDocumentation(
 	if behavior == "external-interface-documentation-coverage" && response.GemaraResult() == gemara.Passed {
 		return gemara.NeedsReview, "[AI-Assisted] External interface coverage requires human confirmation; the model's pass recommendation and analysis are retained in the AI evidence", gemara.Low
 	}
+	// The AI graded declared evidence that is not the artifact a deterministic
+	// Passed relied on, so it may add its analysis but must not lower the grade.
+	if deterministic.result == gemara.Passed && response.GemaraResult() != gemara.Passed {
+		return deterministic.result, deterministic.message, deterministic.confidence
+	}
 	return response.GemaraResult(), response.Summary(), securityAssessmentConfidence(behavior, response)
 }
 
 // Confidence reflects the evidence, not the model's certainty about its verdict.
-// Review deferrals lack sufficient evidence, and documentary coverage claims
-// cannot establish completeness against an independently observed inventory.
+// A review deferral lacks sufficient evidence, so it is always Low. Only for
+// design-documentation coverage is a model Passed additionally capped from High
+// to Medium, because a documentary coverage claim cannot establish completeness
+// against an independently observed inventory; the SA-03.x behaviors keep the
+// model's reported confidence.
 func securityAssessmentConfidence(behavior string, response sdkai.Response) gemara.ConfidenceLevel {
 	if response.GemaraResult() == gemara.NeedsReview {
 		return gemara.Low
@@ -613,6 +643,20 @@ func securityAssessmentConfidence(behavior string, response sdkai.Response) gema
 		return gemara.Medium
 	}
 	return confidence
+}
+
+// declaredSecurityAssessmentURLs reports the declared evidence URLs for a
+// behavior without fetching them, so callers can decide whether AI grading is
+// warranted before constructing a client or accessing the network.
+func declaredSecurityAssessmentURLs(payload data.Payload, behavior string) ([]string, error) {
+	if payload.RestData == nil {
+		return nil, fmt.Errorf("payload missing required repository data")
+	}
+	if payload.InsightsError {
+		return nil, fmt.Errorf("security insights could not be parsed")
+	}
+	_, urls, err := declaredEvidenceURLs(payload.Insights, behavior)
+	return urls, err
 }
 
 // securityAssessmentEvidence retrieves only explicitly declared artifacts. If
@@ -687,9 +731,19 @@ func declaredEvidenceURLs(insights si.SecurityInsights, behavior string) (securi
 			break
 		}
 		assessments := insights.Repository.SecurityPosture.Assessments
-		evidence.SelfAssessment = aiAssessmentDeclaration(assessments.Self)
-		declarations := []*securityAssessmentDeclaration{evidence.SelfAssessment}
+		// Only assessments the deterministic path would credit are eligible: a
+		// denial-only comment ("No self assessment has been completed") is not a
+		// declaration, so it must not force an evidence-URL requirement that would
+		// otherwise demote the deterministic Failed to NeedsReview.
+		var declarations []*securityAssessmentDeclaration
+		if assessmentDeclared(assessments.Self) {
+			evidence.SelfAssessment = aiAssessmentDeclaration(assessments.Self)
+			declarations = append(declarations, evidence.SelfAssessment)
+		}
 		for _, assessment := range assessments.ThirdPartyAssessment {
+			if !assessmentDeclared(assessment) {
+				continue
+			}
 			if declaration := aiAssessmentDeclaration(assessment); declaration != nil {
 				evidence.ThirdPartyAssessments = append(evidence.ThirdPartyAssessments, *declaration)
 				declarations = append(declarations, declaration)
