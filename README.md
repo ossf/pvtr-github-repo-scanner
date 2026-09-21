@@ -70,7 +70,11 @@ and `raw.githubusercontent.com/...` file links in the repository being
 assessed are supported. Each link's ref is used rather than silently reading
 the default branch; a fully-qualified `refs/heads/<branch>` or
 `refs/tags/<tag>` ref (as GitHub's "Raw" button now emits) is accepted, and any
-other slash-containing ref must encode the slash as `%2F`.
+other slash-containing ref must encode the slash as `%2F`. A slash inside a
+fully-qualified branch or tag name must likewise be encoded, as in
+`refs/heads/release%2Fv2/CHANGELOG.md`; an unencoded
+`refs/heads/release/v2/CHANGELOG.md` is read as branch `release` and path
+`v2/CHANGELOG.md`.
 Query strings, credentials in URLs, and redirects are not supported. URL
 fragments select no smaller scope: the entire declared file is reviewed.
 Supported text formats are Markdown, AsciiDoc, reStructuredText,
@@ -82,26 +86,29 @@ followed.
   used unchanged; the scanner does not search for alternative AI evidence, and a
   misconfigured provider cannot change the verdict for such a repository.
 - Enabling AI never produces a worse verdict than the AI-disabled path. When
-  declared evidence cannot be gathered — an unsupported URL host or format
+  declared evidence cannot be gathered - an unsupported URL host or format
   (including PDFs), a retrieval error, an unparseable Security Insights file, or
-  evidence exceeding 16 distinct URLs or the 64 KiB JSON packet budget — the
+  evidence exceeding 16 distinct URLs or the 64 KiB JSON packet budget - the
   deterministic verdict is preserved rather than demoted. A comment-only or
   name-only assessment is not a gradeable declaration; a comment that denies an
   assessment was performed keeps the deterministic Failed.
 - AI provider and response-validation failures return **NeedsReview** with low
-  confidence and a message describing the deferral. AI-client construction
-  failure returns **NeedsReview** only when there is declared evidence to grade.
+  confidence and a message describing the deferral unless the deterministic
+  verdict was **Passed**, in which case the deterministic verdict is preserved.
+  AI-client construction failure follows the same rule when there is declared
+  evidence to grade.
 - A successful AI response can resolve a deterministic **NeedsReview** into a
   Passed or Failed verdict, but it cannot lower a deterministic **Passed**: the
-  only Passed reaching AI review rests on a repository-root document whose content
-  the AI packet never contains, so the model's analysis is recorded as advisory
-  evidence without changing the grade. Design passes are otherwise capped at
-  medium confidence: documentary coverage is not proof that every released
-  component was documented. AI NeedsReview verdicts use low confidence, even when
-  the model reports high confidence in its deferral.
-- For OSPS-SA-02.01, every AI pass recommendation returns **NeedsReview** with
-  low confidence and an explicit request for human confirmation. Live tests
-  showed inconsistent acceptance of insufficient interface documentation.
+  result is clamped to the AI-disabled verdict after model analysis, and the
+  model's analysis is recorded as advisory evidence without changing the grade.
+  Design passes are otherwise capped at medium confidence: documentary coverage
+  is not proof that every released component was documented. AI NeedsReview
+  verdicts use low confidence, even when the model reports high confidence in its
+  deferral.
+- For OSPS-SA-02.01, an AI pass recommendation returns **NeedsReview** with low
+  confidence and an explicit request for human confirmation unless that would
+  lower a deterministic **Passed**. Live tests showed inconsistent acceptance of
+  insufficient interface documentation.
   The original model verdict, explanation, and citations remain in the AI
   evidence for review; they are recommendations, not the final scanner result.
   AI Failed and NeedsReview responses keep their normal result handling.

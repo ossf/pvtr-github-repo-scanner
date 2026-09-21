@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
@@ -556,9 +557,8 @@ type securityAssessmentVerdict struct {
 // declaration preserves the deterministic verdict; ungatherable declared
 // evidence also preserves it, so enabling AI never produces a worse verdict than
 // the AI-disabled path. A successful AI verdict may resolve a deterministic
-// NeedsReview but may not downgrade a deterministic Passed, because the only
-// Passed reaching here (a root-file match) rests on an artifact the AI packet
-// never contains.
+// NeedsReview, but AI deferrals and lower model verdicts may not downgrade a
+// deterministic Passed.
 func gradeSecurityAssessmentDocumentation(
 	payload data.Payload,
 	controlID string,
@@ -575,6 +575,9 @@ func gradeSecurityAssessmentDocumentation(
 	// misconfigured.
 	urls, selErr := declaredSecurityAssessmentURLs(payload, behavior)
 	if selErr != nil || len(urls) == 0 {
+		if selErr != nil && payload.Config.Logger != nil {
+			payload.Config.Logger.Warn(controlID+": unable to select declared security assessment evidence; using deterministic verdict", "err", selErr)
+		}
 		return deterministic.result, deterministic.message, deterministic.confidence
 	}
 
@@ -582,7 +585,7 @@ func gradeSecurityAssessmentDocumentation(
 	if clientErr != nil {
 		// There is material to grade and the operator asked for AI review, so a
 		// misconfigured client is a fatal deferral rather than a silent pass.
-		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review was requested but the AI client could not be constructed; manual review is required", "AI client construction failed", clientErr)
+		return securityAssessmentAIFallbackWithPassFloor(payload, controlID, deterministic, "AI-assisted review was requested but the AI client could not be constructed; manual review is required", "AI client construction failed", clientErr)
 	}
 	if client == nil {
 		return deterministic.result, deterministic.message, deterministic.confidence
@@ -604,25 +607,48 @@ func gradeSecurityAssessmentDocumentation(
 
 	response, aiEvidence, err := reusable_steps.RunAIAssessment(client, behavior, material)
 	if err != nil {
-		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review of the declared evidence did not complete; manual review is required", "AI assessment failed", err)
+		return securityAssessmentAIFallbackWithPassFloor(payload, controlID, deterministic, "AI-assisted review of the declared evidence did not complete; manual review is required", "AI assessment failed", err)
 	}
 	if err := reusable_steps.ValidateAIResponse(response); err != nil {
-		return reusable_steps.AIFallback(payload, controlID, "AI-assisted review returned a response that did not conform to the expected verdict schema; manual review is required", "AI response did not conform to the expected verdict schema", err)
+		return securityAssessmentAIFallbackWithPassFloor(payload, controlID, deterministic, "AI-assisted review returned a response that did not conform to the expected verdict schema; manual review is required", "AI response did not conform to the expected verdict schema", err)
 	}
 
 	if len(sources) > 0 {
 		aiEvidence.Description = fmt.Sprintf("AI Assisted Review of %s", strings.Join(sources, ", "))
 	}
 	payload.AddEvidence(aiEvidence)
+	result, message, confidence := response.GemaraResult(), response.Summary(), securityAssessmentConfidence(behavior, response)
 	if behavior == "external-interface-documentation-coverage" && response.GemaraResult() == gemara.Passed {
-		return gemara.NeedsReview, "[AI-Assisted] External interface coverage requires human confirmation; the model's pass recommendation and analysis are retained in the AI evidence", gemara.Low
+		result, message, confidence = gemara.NeedsReview, "[AI-Assisted] External interface coverage requires human confirmation; the model's pass recommendation and analysis are retained in the AI evidence", gemara.Low
 	}
-	// The AI graded declared evidence that is not the artifact a deterministic
-	// Passed relied on, so it may add its analysis but must not lower the grade.
-	if deterministic.result == gemara.Passed && response.GemaraResult() != gemara.Passed {
+	// Apply the invariant after all AI verdict mapping, so model deferrals and
+	// behavior-specific caps may add evidence but must not lower a deterministic
+	// Passed.
+	return securityAssessmentResultWithPassFloor(deterministic, result, message, confidence)
+}
+
+func securityAssessmentAIFallbackWithPassFloor(
+	payload data.Payload,
+	controlID string,
+	deterministic securityAssessmentVerdict,
+	fallbackMessage string,
+	reason string,
+	err error,
+) (gemara.Result, string, gemara.ConfidenceLevel) {
+	result, message, confidence := reusable_steps.AIFallback(payload, controlID, fallbackMessage, reason, err)
+	return securityAssessmentResultWithPassFloor(deterministic, result, message, confidence)
+}
+
+func securityAssessmentResultWithPassFloor(
+	deterministic securityAssessmentVerdict,
+	result gemara.Result,
+	message string,
+	confidence gemara.ConfidenceLevel,
+) (gemara.Result, string, gemara.ConfidenceLevel) {
+	if deterministic.result == gemara.Passed && result != gemara.Passed {
 		return deterministic.result, deterministic.message, deterministic.confidence
 	}
-	return response.GemaraResult(), response.Summary(), securityAssessmentConfidence(behavior, response)
+	return result, message, confidence
 }
 
 // Confidence reflects the evidence, not the model's certainty about its verdict.
@@ -766,10 +792,10 @@ func declaredEvidenceURLs(insights si.SecurityInsights, behavior string) (securi
 
 func aiAssessmentDeclaration(assessment si.Assessment) *securityAssessmentDeclaration {
 	declaration := securityAssessmentDeclaration{
-		Comment: strings.TrimSpace(assessment.Comment),
+		Comment: strings.TrimSpace(sanitizeSecurityAssessmentPromptText(assessment.Comment)),
 	}
 	if assessment.Name != nil {
-		declaration.Name = strings.TrimSpace(*assessment.Name)
+		declaration.Name = strings.TrimSpace(sanitizeSecurityAssessmentPromptText(*assessment.Name))
 	}
 	if assessment.Evidence != nil {
 		declaration.Evidence = strings.TrimSpace(string(*assessment.Evidence))
@@ -778,6 +804,15 @@ func aiAssessmentDeclaration(assessment si.Assessment) *securityAssessmentDeclar
 		return nil
 	}
 	return &declaration
+}
+
+func sanitizeSecurityAssessmentPromptText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cf) || (unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t') {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func siURL(value *si.URL) string {

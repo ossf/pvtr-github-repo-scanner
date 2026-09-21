@@ -193,8 +193,8 @@ func TestSecurityAssessmentAIFailuresNeedReview(t *testing.T) {
 				stubAIClientFactory(t, client, test.factoryErr)
 				payload := declaredPayload()
 				result, message, confidence := control.assess(payload)
-				if test.gatherFail {
-					assert.Equal(t, detResult, result, "ungatherable declared evidence preserves the deterministic verdict")
+				if test.gatherFail || detResult == gemara.Passed {
+					assert.Equal(t, detResult, result, "AI failures cannot lower a deterministic Passed, and ungatherable evidence preserves any deterministic verdict")
 					assert.Equal(t, detMessage, message)
 					assert.Equal(t, detConfidence, confidence)
 				} else {
@@ -211,6 +211,76 @@ func TestSecurityAssessmentAIFailuresNeedReview(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSecurityAssessmentAIFallbacksCannotLowerDeterministicPass(t *testing.T) {
+	tests := []struct {
+		name        string
+		factoryErr  error
+		providerErr error
+		body        string
+		wantFetches int
+	}{
+		{name: "client construction", factoryErr: errors.New("invalid AI configuration"), wantFetches: 0},
+		{name: "provider", providerErr: errors.New("provider unavailable"), body: passBody, wantFetches: 1},
+		{name: "schema validation", body: `{"result":"pass","confidence":"high","message":"m"}`, wantFetches: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+"/passed", func(t *testing.T) {
+			fetches := 0
+			stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+				fetches++
+				return data.DocumentationFile{Path: "review.md", Content: "evidence"}, nil
+			})
+			client := &securityAssessmentAIClient{body: test.body, err: test.providerErr}
+			stubAIClientFactory(t, client, test.factoryErr)
+			deterministic := securityAssessmentVerdict{
+				result:     gemara.Passed,
+				message:    "deterministic pass",
+				confidence: gemara.High,
+			}
+
+			result, message, confidence := gradeSecurityAssessmentDocumentation(
+				declaredPayload(),
+				"OSPS-SA-01.01",
+				"design-documentation-coverage",
+				deterministic,
+			)
+
+			assert.Equal(t, deterministic.result, result)
+			assert.Equal(t, deterministic.message, message)
+			assert.Equal(t, deterministic.confidence, confidence)
+			assert.Equal(t, test.wantFetches, fetches)
+			if test.factoryErr != nil {
+				assert.Zero(t, client.calls)
+			}
+		})
+
+		t.Run(test.name+"/non-passed", func(t *testing.T) {
+			stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+				return data.DocumentationFile{Path: "review.md", Content: "evidence"}, nil
+			})
+			client := &securityAssessmentAIClient{body: test.body, err: test.providerErr}
+			stubAIClientFactory(t, client, test.factoryErr)
+			deterministic := securityAssessmentVerdict{
+				result:     gemara.Failed,
+				message:    "deterministic fail",
+				confidence: gemara.Medium,
+			}
+
+			result, message, confidence := gradeSecurityAssessmentDocumentation(
+				declaredPayload(),
+				"OSPS-SA-01.01",
+				"design-documentation-coverage",
+				deterministic,
+			)
+
+			assert.Equal(t, gemara.NeedsReview, result)
+			assert.Equal(t, gemara.Low, confidence)
+			assert.NotEqual(t, deterministic.message, message)
+		})
 	}
 }
 
@@ -372,6 +442,33 @@ func TestExternalInterfaceAIPassRequiresHumanConfirmation(t *testing.T) {
 	}
 }
 
+func TestExternalInterfaceAIPassCannotLowerDeterministicPass(t *testing.T) {
+	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+		return data.DocumentationFile{Path: "interfaces.md", Content: "declared interface evidence"}, nil
+	})
+	client := &securityAssessmentAIClient{body: passBody}
+	stubAIClientFactory(t, client, nil)
+	payload := declaredPayload()
+	deterministic := securityAssessmentVerdict{
+		result:     gemara.Passed,
+		message:    "deterministic external interface pass",
+		confidence: gemara.High,
+	}
+
+	result, message, confidence := gradeSecurityAssessmentDocumentation(
+		payload,
+		"OSPS-SA-02.01",
+		"external-interface-documentation-coverage",
+		deterministic,
+	)
+
+	assert.Equal(t, deterministic.result, result)
+	assert.Equal(t, deterministic.message, message)
+	assert.Equal(t, deterministic.confidence, confidence)
+	assert.Equal(t, 1, client.calls)
+	assert.Len(t, payload.GetEvidence(), 1, "AI evidence is retained even when the result is clamped")
+}
+
 func TestDeclaredEvidenceSelection(t *testing.T) {
 	payload := declaredPayload()
 	payload.Insights.Repository.SecurityPosture.Assessments.ThirdPartyAssessment = []si.Assessment{
@@ -393,6 +490,26 @@ func TestDeclaredEvidenceSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecurityAssessmentDeclarationPromptTextIsSanitized(t *testing.T) {
+	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
+		return data.DocumentationFile{Path: "review.md", Content: "declared artifact"}, nil
+	})
+	payload := declaredPayload()
+	payload.Insights.Repository.SecurityPosture.Assessments.Self = si.Assessment{
+		Name:     ptrTo("Security\u202e assessment\x00\nline\tTabbed\rReturn"),
+		Comment:  "Comment\u200d text\x1f\nline\tTabbed\rReturn",
+		Evidence: ptrTo(si.URL(reviewURL)),
+	}
+
+	material, _, err := securityAssessmentEvidence(payload, "security-assessment-adequacy")
+	require.NoError(t, err)
+	var packet securityAssessmentAIEvidence
+	require.NoError(t, json.Unmarshal([]byte(material), &packet))
+	require.NotNil(t, packet.SecurityInsights.SelfAssessment)
+	assert.Equal(t, "Security assessment\nline\tTabbed\rReturn", packet.SecurityInsights.SelfAssessment.Name)
+	assert.Equal(t, "Comment text\nline\tTabbed\rReturn", packet.SecurityInsights.SelfAssessment.Comment)
 }
 
 func TestNoDeclaredEvidenceDoesNotDiscoverDocuments(t *testing.T) {

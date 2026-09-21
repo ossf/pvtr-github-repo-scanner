@@ -94,13 +94,13 @@ func (r *RestData) getDeclaredDocumentation(rawURL string) (DocumentationFile, e
 	if len(decoded) > maxDeclaredDocumentationBytes {
 		return DocumentationFile{}, fmt.Errorf("declared documentation exceeds %d bytes", maxDeclaredDocumentationBytes)
 	}
-	text := string(decoded)
+	text := strings.TrimPrefix(string(decoded), "\ufeff")
+	textBytes := []byte(text)
 	if !utf8.ValidString(text) || strings.ContainsFunc(text, func(r rune) bool {
-		// unicode.IsControl only covers the Cc category, so also reject the Cf
-		// (format) category: zero-width spaces, bidi overrides, and the tag block
-		// used to smuggle hidden-text prompt injection past a human reviewer.
+		// After tolerating a leading BOM, reject remaining control and format
+		// runes as defense-in-depth against hidden-text prompt injection.
 		return (unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t') || unicode.Is(unicode.Cf, r)
-	}) || (len(decoded) > 0 && !strings.HasPrefix(http.DetectContentType(decoded), "text/")) {
+	}) || (len(textBytes) > 0 && !strings.HasPrefix(http.DetectContentType(textBytes), "text/")) {
 		return DocumentationFile{}, errors.New("declared documentation is not UTF-8 text")
 	}
 	return DocumentationFile{Path: filePath, Content: text}, nil
@@ -127,9 +127,12 @@ func parseDeclaredDocumentationURL(rawURL, owner, repo string) (ref, filePath st
 	if len(segments) < refIndex+2 {
 		return "", "", errors.New("declared documentation URL is missing a ref or file path")
 	}
+	qualifiedRefNameSegment := segments[refIndex] == "refs" && len(segments) >= refIndex+3 &&
+		(segments[refIndex+1] == "heads" || segments[refIndex+1] == "tags")
 	for i, segment := range segments {
 		decoded, decodeErr := url.PathUnescape(segment)
-		if decodeErr != nil || !validDeclaredDocumentationSegment(decoded, i == refIndex) {
+		allowSlash := i == refIndex || (qualifiedRefNameSegment && i == refIndex+2)
+		if decodeErr != nil || !validDeclaredDocumentationSegment(decoded, allowSlash) {
 			return "", "", errors.New("declared documentation URL contains an invalid path segment")
 		}
 		segments[i] = decoded
@@ -145,8 +148,7 @@ func parseDeclaredDocumentationURL(rawURL, owner, repo string) (ref, filePath st
 	// ref (the Contents API accepts fully-qualified refs) so the file path starts
 	// after it rather than being mis-split into "heads/<branch>/...".
 	refEnd := refIndex + 1
-	if segments[refIndex] == "refs" && len(segments) >= refIndex+3 &&
-		(segments[refIndex+1] == "heads" || segments[refIndex+1] == "tags") {
+	if qualifiedRefNameSegment {
 		refEnd = refIndex + 3
 	}
 	if len(segments) < refEnd+1 {
@@ -164,11 +166,11 @@ func parseDeclaredDocumentationURL(rawURL, owner, repo string) (ref, filePath st
 	return ref, filePath, nil
 }
 
-func validDeclaredDocumentationSegment(segment string, isRef bool) bool {
+func validDeclaredDocumentationSegment(segment string, allowSlash bool) bool {
 	if !utf8.ValidString(segment) || strings.ContainsAny(segment, "\\%") || strings.ContainsFunc(segment, unicode.IsControl) {
 		return false
 	}
-	if !isRef && strings.Contains(segment, "/") {
+	if !allowSlash && strings.Contains(segment, "/") {
 		return false
 	}
 	for _, part := range strings.Split(segment, "/") {

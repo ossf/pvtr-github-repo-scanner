@@ -42,7 +42,11 @@ func TestGetDeclaredDocumentationPreservesRefAndPath(t *testing.T) {
 		{"raw branch slash", "https://raw.githubusercontent.com/owner/repo/feature%2fdesign/docs/design.md", "feature/design", "docs/design.md"},
 		{"raw refs/heads", "https://raw.githubusercontent.com/owner/repo/refs/heads/main/docs/design.md", "refs/heads/main", "docs/design.md"},
 		{"raw refs/tags", "https://raw.githubusercontent.com/owner/repo/refs/tags/v1.2.3/docs/design.md", "refs/tags/v1.2.3", "docs/design.md"},
+		{"raw refs/heads slash", "https://raw.githubusercontent.com/owner/repo/refs/heads/release%2Fv2/CHANGELOG.md", "refs/heads/release/v2", "CHANGELOG.md"},
+		{"raw refs/tags slash", "https://raw.githubusercontent.com/owner/repo/refs/tags/release%2Fv2/docs/design.md", "refs/tags/release/v2", "docs/design.md"},
 		{"blob refs/heads", "https://github.com/owner/repo/blob/refs/heads/main/design.md", "refs/heads/main", "design.md"},
+		{"blob refs/heads slash", "https://github.com/owner/repo/blob/refs/heads/release%2Fv2/CHANGELOG.md", "refs/heads/release/v2", "CHANGELOG.md"},
+		{"blob refs/tags slash", "https://github.com/owner/repo/blob/refs/tags/release%2Fv2/docs/design.md", "refs/tags/release/v2", "docs/design.md"},
 		{"encoded filename", "https://github.com/owner/repo/blob/release/docs/my%20design%23one.md", "release", "docs/my design#one.md"},
 		{"anchor", "https://github.com/owner/repo/blob/release/docs/design.md#security", "release", "docs/design.md"},
 		{"case insensitive identity", "https://GITHUB.COM/OWNER/REPO/blob/Main/Design.MD", "Main", "Design.MD"},
@@ -104,6 +108,7 @@ func TestGetDeclaredDocumentationRejectsURLWithoutHTTP(t *testing.T) {
 		"https://github.com/owner/repo/blob/main/docs/../design.md",
 		"https://github.com/owner/repo/blob/main/docs/%2e%2e/design.md",
 		"https://github.com/owner/repo/blob/main/docs/%252e%252e/design.md",
+		"https://raw.githubusercontent.com/owner/repo/refs/heads/main/docs%2Fdesign.md",
 		"https://github.com/owner/repo/blob/main/docs%2f..%2fdesign.md",
 		"https://github.com/owner/repo/blob/main/docs%5cdesign.md",
 		"https://github.com/owner/repo/blob/main/docs/%00design.md",
@@ -194,6 +199,7 @@ func TestGetDeclaredDocumentationContentValidation(t *testing.T) {
 		{"nul", declaredDocumentationEntry("design.md", "abc\x00def"), "UTF-8 text"},
 		{"control", declaredDocumentationEntry("design.md", "abc\x1bdef"), "UTF-8 text"},
 		{"zero-width space", declaredDocumentationEntry("design.md", "abc\u200bdef"), "UTF-8 text"},
+		{"zero-width joiner", declaredDocumentationEntry("design.md", "abc\u200ddef"), "UTF-8 text"},
 		{"bidi override", declaredDocumentationEntry("design.md", "abc\u202edef"), "UTF-8 text"},
 		{"tag block prompt injection", declaredDocumentationEntry("design.md", "abc\U000e0041def"), "UTF-8 text"},
 		{"pdf masquerading as text", declaredDocumentationEntry("design.md", "%PDF-1.7\n"), "UTF-8 text"},
@@ -245,6 +251,15 @@ func TestGetDeclaredDocumentationContentValidation(t *testing.T) {
 			assert.Equal(t, 1, calls)
 		})
 	}
+}
+
+func TestGetDeclaredDocumentationStripsLeadingBOM(t *testing.T) {
+	payload := declaredDocumentationPayload(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(declaredDocumentationEntry("design.md", "\ufeffDeclared design\n")))
+	})
+	file, err := payload.GetDeclaredDocumentation("https://github.com/owner/repo/blob/main/design.md")
+	require.NoError(t, err)
+	assert.Equal(t, DocumentationFile{Path: "design.md", Content: "Declared design\n"}, file)
 }
 
 func TestGetDeclaredDocumentationRejectsDirectoryAndInvalidResponse(t *testing.T) {
