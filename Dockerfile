@@ -2,11 +2,11 @@ FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cab
 RUN apk add --no-cache wget tar unzip
 
 WORKDIR /app
-ARG VERSION=0.22.0
+ARG VERSION=0.23.2
 ARG PLATFORM=Linux_x86_64  # Change this based on your target system
 
-RUN wget https://github.com/privateerproj/privateer/releases/download/v${VERSION}/privateer_${PLATFORM}.tar.gz
-RUN tar -xzf privateer_${PLATFORM}.tar.gz
+RUN wget https://github.com/privateerproj/pvtr/releases/download/v${VERSION}/pvtr_${PLATFORM}.tar.gz
+RUN tar -xzf pvtr_${PLATFORM}.tar.gz
 
 FROM golang:1.26.4-alpine3.22@sha256:727cfc3c40be55cd1bc9a4a059406b28a059857e3be752aa9d09531e12c20c56 AS plugin
 RUN apk add --no-cache make git

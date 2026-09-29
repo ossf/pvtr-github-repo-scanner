@@ -70,7 +70,7 @@ if [ -z "$PRIVATEER_VERSION" ]; then
   exit 1
 fi
 
-ASSET_PATTERN="privateer_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
+ASSET_PATTERN="pvtr_${RELEASE_OS}_${RELEASE_ARCH}.tar.gz"
 ASSET_TAG="v${PRIVATEER_VERSION}"
 PLUGIN_DIR="./tmp/plugins"
 PRIVATEER_BIN=""
@@ -90,7 +90,7 @@ EOF
 # Download the same pvtr release version used by the Docker image.
 gh release download \
   "$ASSET_TAG" \
-  --repo privateerproj/privateer \
+  --repo privateerproj/pvtr \
   --pattern "$ASSET_PATTERN" \
   --dir /tmp \
   --clobber || { echo "ERROR: Failed to download pvtr release"; exit 1; }

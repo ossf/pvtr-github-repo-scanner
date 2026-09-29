@@ -20,7 +20,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh api repos/privateerproj/privateer/releases/latest --jq .tag_name)
+          TAG=$(gh api repos/privateerproj/pvtr/releases/latest --jq .tag_name)
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Get current pinned version

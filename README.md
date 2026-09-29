@@ -26,7 +26,7 @@ Level 2 and Level 3 requirements are undergoing current development and may be l
 
 To run the GitHub scanner locally, you will need the Privateer (`pvtr`) framework and the GitHub repository scanner (`pvtr-github-repo-scanner`) plugin.
 
-1. Install pvtr using one of the methods described [here](https://github.com/privateerproj/privateer/blob/main/README.md#step-2-choose-your-installation-method).
+1. Install pvtr using one of the methods described [here](https://github.com/privateerproj/pvtr/blob/main/README.md#step-2-choose-your-installation-method).
 2. Next, download the `pvtr-github-repo-scanner` plugin from the [releases](https://github.com/ossf/pvtr-github-repo-scanner/releases).
 
 The following command is an example where the `pvtr`, the `pvtr-github-repo-scanner`, and the `config.yaml` are in the same directory.
