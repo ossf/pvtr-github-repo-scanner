@@ -42,7 +42,7 @@ jobs:
       # ci_publishers trusted publisher for the openssf namespace.
       id-token: write
     env:
-      PVTR_VERSION: v0.22.1 # first pvtr release that ships `pvtr publish`
+      PVTR_VERSION: v0.24.0 # module path is github.com/privateerproj/pvtr from v0.24.0 on
       PVTR_HUB_URL: ${{ inputs.hub-url }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -56,7 +56,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: install pvtr
-        run: go install github.com/privateerproj/privateer@${PVTR_VERSION}
+        run: go install "github.com/privateerproj/pvtr@${PVTR_VERSION}"
       # This rebuild is not byte-identical to the release-attested artifacts
       # (BuiltAt is stamped per build), so the hub's Sigstore bundle attests
       # these bytes, not the GitHub release's. `pvtr publish --dist` needs a
