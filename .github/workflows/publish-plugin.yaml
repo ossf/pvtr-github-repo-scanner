@@ -80,4 +80,4 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience_uri}" | jq -er '.value // empty')
           echo "::add-mask::${PVTR_TOKEN}"
           export PVTR_TOKEN
-          privateer publish
+          pvtr publish
