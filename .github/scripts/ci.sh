@@ -99,10 +99,8 @@ tar xzf "/tmp/$ASSET_PATTERN" -C "./tmp" || { echo "ERROR: Failed to extract plu
 
 if [ -x "./tmp/pvtr" ]; then
   PRIVATEER_BIN="./tmp/pvtr"
-elif [ -x "./tmp/privateer" ]; then
-  PRIVATEER_BIN="./tmp/privateer"
 else
-  echo "ERROR: Failed to locate privateer binary after extraction"
+  echo "ERROR: Failed to locate pvtr binary after extraction"
   exit 1
 fi
 
