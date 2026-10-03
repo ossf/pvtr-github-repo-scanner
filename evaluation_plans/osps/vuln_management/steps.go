@@ -332,8 +332,10 @@ func workflowCoversChanges(workflow *actionlint.Workflow, defaultBranch string) 
 // sastSource is a detected signal that SAST runs on changes: either a tool
 // identifier or a workflow/job status-check context. toolID links workflow
 // aliases to policy evidence for the same tool in Security Insights.
-// workflowAlias prevents separate Insights declarations in the same tool family
-// from lending policy evidence to each other.
+// workflowAlias distinguishes a workflow-derived check context from a Security
+// Insights declaration: only workflow-derived sources can satisfy enforcement
+// correlation, and separate Insights declarations in the same tool family do
+// not lend policy evidence to each other.
 type sastSource struct {
 	name             string
 	toolID           string
@@ -554,26 +556,36 @@ func jobUsesSast(job *actionlint.Job) string {
 }
 
 // requiredCheckMatchesSast reports whether a required status-check context
-// exactly matches a detected tool or complete workflow/job context. withPolicy
-// is true only when at least one matched source carries a documented SAST
-// ruleset or policy, so enforcement of a policy-less tool is not mistaken for a
-// documented gate even when an unrelated tool does document one.
-func requiredCheckMatchesSast(requiredContexts []string, sastSources []sastSource) (matched bool, withPolicy bool) {
-	for _, context := range requiredContexts {
-		normalizedContext := strings.ToLower(strings.TrimSpace(context))
-		if normalizedContext == "" {
+// exactly matches a workflow-derived SAST source. Security Insights
+// declarations are deliberately ineligible: they can document policy but cannot
+// by themselves show that anything runs and is enforced. withPolicy is true
+// only when at least one matched source carries a documented SAST ruleset or
+// policy, so enforcement of a policy-less tool is not mistaken for a documented
+// gate even when an unrelated tool does document one. producerUncertain is true
+// when a matching check is pinned to a specific GitHub App, since the scanner
+// cannot correlate that pin with the workflow that publishes the check.
+func requiredCheckMatchesSast(required []scaRequiredStatusCheck, sastSources []sastSource) (matched bool, withPolicy bool, producerUncertain bool) {
+	for _, requiredCheck := range required {
+		normalizedRequired := strings.ToLower(strings.TrimSpace(requiredCheck.context))
+		if normalizedRequired == "" {
 			continue
 		}
 		for _, source := range sastSources {
-			if normalizedContext == strings.ToLower(strings.TrimSpace(source.name)) {
-				matched = true
-				if source.policyDocumented {
-					withPolicy = true
-				}
+			if !source.workflowAlias ||
+				normalizedRequired != strings.ToLower(strings.TrimSpace(source.name)) {
+				continue
+			}
+			if requiredCheck.integrationID != nil {
+				producerUncertain = true
+				continue
+			}
+			matched = true
+			if source.policyDocumented {
+				withPolicy = true
 			}
 		}
 	}
-	return matched, withPolicy
+	return matched, withPolicy, producerUncertain
 }
 
 // SastEnforcedOnChanges checks that all changes to the codebase are
@@ -581,6 +593,9 @@ func requiredCheckMatchesSast(requiredContexts []string, sastSources []sastSourc
 // It confirms both that a SAST tool runs on changes (in CI, per
 // Security Insights or a workflow triggered by pull_request/push) and that it is
 // enforced as a required status check that blocks merges to the default branch.
+// Only a workflow-derived check context can satisfy that correlation, and a
+// check pinned to a specific GitHub App is reported for review rather than
+// trusted by context name alone.
 func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	var detection sastDetection
 	if payload.RestData != nil && payload.Insights.Repository != nil {
@@ -608,29 +623,24 @@ func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message 
 		detection.inspectionBlocked = true
 	}
 
-	// Union the status-check contexts required on the default branch from both
-	// sources the scanner can observe: classic branch protection (admin-only)
-	// and repository rulesets (publicly readable).
-	var requiredContexts []string
-	if payload.GraphqlRepoData != nil {
-		requiredContexts = append(requiredContexts, payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts...)
-	}
-	if payload.RepositoryMetadata != nil {
-		requiredContexts = append(requiredContexts, payload.RepositoryMetadata.RequiredStatusCheckContexts()...)
-	}
+	// Required checks are read from both sources the scanner can observe:
+	// classic branch protection (admin-only) and repository rulesets (publicly
+	// readable). Their producer pins are preserved so that an app-pinned check
+	// is not trusted by context name alone.
+	required := requiredStatusChecks(payload)
 
 	// An admin token sees full detail; an observed absence of protection means
 	// there are no required checks to miss.
 	protectionObservable := (payload.RepositoryMetadata != nil && payload.RepositoryMetadata.ViewerCanAdminister()) ||
 		data.ObservedUnprotected(payload.RepositoryMetadata)
 
-	return evaluateSastEnforcement(detection, requiredContexts, protectionObservable)
+	return evaluateSastEnforcement(detection, required, protectionObservable)
 }
 
 // evaluateSastEnforcement applies the SastEnforcedOnChanges decision matrix to the
 // gathered signals, kept separate from data access so it can be unit tested with
 // plain inputs.
-func evaluateSastEnforcement(detection sastDetection, requiredContexts []string, protectionObservable bool) (gemara.Result, string, gemara.ConfidenceLevel) {
+func evaluateSastEnforcement(detection sastDetection, required []scaRequiredStatusCheck, protectionObservable bool) (gemara.Result, string, gemara.ConfidenceLevel) {
 	if detection.inspectionBlocked && !detection.coverageProven {
 		return gemara.NeedsReview, "Workflow inspection was incomplete, so the scanner could not determine whether SAST runs on all changes", gemara.Low
 	}
@@ -638,14 +648,18 @@ func evaluateSastEnforcement(detection sastDetection, requiredContexts []string,
 		return gemara.Failed, "No Static Application Security Testing runs on changes, in Security Insights or a CI workflow triggered by pull requests or pushes", gemara.Medium
 	}
 
-	if matched, matchedWithPolicy := requiredCheckMatchesSast(requiredContexts, detection.sources); matched {
+	matched, matchedWithPolicy, producerUncertain := requiredCheckMatchesSast(required, detection.sources)
+	if matched {
 		if !matchedWithPolicy {
 			return gemara.NeedsReview, "A SAST tool runs in CI and is enforced as a required status check, but no documented SAST ruleset or policy was found in Security Insights", gemara.Medium
 		}
 		return gemara.Passed, "A SAST tool runs in CI and is enforced as a required status check on the default branch, blocking merges on violations", gemara.High
 	}
+	if producerUncertain {
+		return gemara.NeedsReview, "A SAST workflow context matches a required ruleset check, but that check is pinned to a GitHub App whose identity could not be correlated to the workflow producer", gemara.Medium
+	}
 
-	if len(requiredContexts) > 0 {
+	if len(required) > 0 {
 		return gemara.NeedsReview, "A SAST tool runs in CI and required status checks are configured on the default branch, but none could be matched to the SAST tool; confirm the SAST check must pass before merging", gemara.Medium
 	}
 

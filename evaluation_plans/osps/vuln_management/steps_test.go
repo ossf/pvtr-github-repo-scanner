@@ -441,7 +441,7 @@ jobs:
 		}
 		associateSastPolicies(detection.sources)
 
-		result, _, _ := evaluateSastEnforcement(detection, []string{test.requiredContext}, true)
+		result, _, _ := evaluateSastEnforcement(detection, []scaRequiredStatusCheck{{context: test.requiredContext}}, true)
 		assert.Equal(t, test.expectedResult, result, test.name)
 	}
 }
@@ -463,8 +463,120 @@ func TestDocumentedPolicyMatchesReusableWorkflowCheck(t *testing.T) {
 	}
 	associateSastPolicies(detection.sources)
 
-	result, _, _ := evaluateSastEnforcement(detection, []string{"SAST gate / analyze"}, true)
+	result, _, _ := evaluateSastEnforcement(detection, []scaRequiredStatusCheck{{context: "SAST gate / analyze"}}, true)
 	assert.Equal(t, gemara.Passed, result)
+}
+
+// TestSecurityInsightsDeclarationAloneCannotSatisfySastEnforcement covers the
+// first half of #437: a Security Insights declaration is not proof that a SAST
+// tool runs, so a required check that merely shares its name must not produce a
+// Passed verdict.
+func TestSecurityInsightsDeclarationAloneCannotSatisfySastEnforcement(t *testing.T) {
+	payload := withWorkflows(observedPayload())
+	payload.Insights.Repository.SecurityPosture.Tools = []si.SecurityTool{{
+		Name:        "CodeQL",
+		Type:        "SAST",
+		Rulesets:    []string{"default"},
+		Integration: si.SecurityToolIntegration{Ci: true},
+	}}
+	payload.RepositoryMetadata = &fakeRequiredChecksMetadata{
+		requiredChecks: []string{"CodeQL"},
+		admin:          true,
+	}
+
+	result, message, _ := SastEnforcedOnChanges(payload)
+	assert.Equal(t, gemara.NeedsReview, result, message)
+}
+
+// TestWorkflowBackedSastStillPassesWithInsightsPolicy covers the second half of
+// #437: Security Insights must still be able to document the policy of a gate
+// that a real workflow provides, so the fix must not block the legitimate path.
+func TestWorkflowBackedSastStillPassesWithInsightsPolicy(t *testing.T) {
+	payload := withWorkflows(observedPayload(), yml("codeql.yml", codeqlWorkflow))
+	payload.Insights.Repository.SecurityPosture.Tools = []si.SecurityTool{{
+		Name:        "CodeQL",
+		Type:        "SAST",
+		Rulesets:    []string{"default"},
+		Integration: si.SecurityToolIntegration{Ci: true},
+	}}
+	payload.RepositoryMetadata = &fakeRequiredChecksMetadata{
+		requiredChecks: []string{"Analyze"},
+		admin:          true,
+	}
+
+	result, message, _ := SastEnforcedOnChanges(payload)
+	assert.Equal(t, gemara.Passed, result, message)
+}
+
+// TestAppPinnedSastRequiredCheckNeedsReview covers the producer-pin half of
+// #437: a required check pinned to a GitHub App cannot be correlated with the
+// workflow that publishes it, so the context name alone is not trusted.
+func TestAppPinnedSastRequiredCheckNeedsReview(t *testing.T) {
+	payload := withWorkflows(observedPayload(), yml("codeql.yml", codeqlWorkflow))
+	payload.Insights.Repository.SecurityPosture.Tools = []si.SecurityTool{{
+		Name:        "CodeQL",
+		Type:        "SAST",
+		Rulesets:    []string{"default"},
+		Integration: si.SecurityToolIntegration{Ci: true},
+	}}
+	integrationID := int64(12345)
+	// The fake mirrors GitHubRepositoryMetadata, where both methods read the
+	// same ruleset: RequiredStatusCheckContexts drops the pin that
+	// RequiredStatusChecks preserves.
+	payload.RepositoryMetadata = &fakePinnedRequiredCheckMetadata{
+		fakeRequiredChecksMetadata: &fakeRequiredChecksMetadata{
+			requiredChecks: []string{"Analyze"},
+			admin:          true,
+		},
+		checks: []data.RequiredStatusCheck{
+			{Context: "Analyze", IntegrationID: &integrationID},
+		},
+	}
+
+	result, message, _ := SastEnforcedOnChanges(payload)
+	assert.Equal(t, gemara.NeedsReview, result, message)
+}
+
+// TestAppPinnedSastCheckNeverFailsOnPinAlone guards the convention that Failed
+// asserts an observed absence: an app-pinned check is uncorrelated, not absent.
+func TestAppPinnedSastCheckNeverFailsOnPinAlone(t *testing.T) {
+	payload := withWorkflows(observedPayload(), yml("codeql.yml", codeqlWorkflow))
+	integrationID := int64(12345)
+	payload.RepositoryMetadata = &fakePinnedRequiredCheckMetadata{
+		fakeRequiredChecksMetadata: &fakeRequiredChecksMetadata{admin: true},
+		checks: []data.RequiredStatusCheck{
+			{Context: "Analyze", IntegrationID: &integrationID},
+		},
+	}
+
+	result, message, _ := SastEnforcedOnChanges(payload)
+	assert.Equal(t, gemara.NeedsReview, result, message)
+}
+
+// TestUnpinnedSastRequiredCheckStillPassesBesidePinnedOne proves the pin is
+// per-check: an unrelated pinned check must not poison a genuine unpinned match.
+func TestUnpinnedSastRequiredCheckStillPassesBesidePinnedOne(t *testing.T) {
+	payload := withWorkflows(observedPayload(), yml("codeql.yml", codeqlWorkflow))
+	payload.Insights.Repository.SecurityPosture.Tools = []si.SecurityTool{{
+		Name:        "CodeQL",
+		Type:        "SAST",
+		Rulesets:    []string{"default"},
+		Integration: si.SecurityToolIntegration{Ci: true},
+	}}
+	integrationID := int64(12345)
+	payload.RepositoryMetadata = &fakePinnedRequiredCheckMetadata{
+		fakeRequiredChecksMetadata: &fakeRequiredChecksMetadata{
+			requiredChecks: []string{"Analyze"},
+			admin:          true,
+		},
+		checks: []data.RequiredStatusCheck{
+			{Context: "Analyze", IntegrationID: &integrationID},
+			{Context: "Analyze"},
+		},
+	}
+
+	result, message, _ := SastEnforcedOnChanges(payload)
+	assert.Equal(t, gemara.Passed, result, message)
 }
 
 func TestMatchesGitHubGlob(t *testing.T) {
@@ -535,126 +647,186 @@ func TestBranchFilterUncertainty(t *testing.T) {
 }
 
 func TestRequiredCheckMatchesSast(t *testing.T) {
+	integrationID := int64(12345)
 	tests := []struct {
-		name             string
-		requiredContexts []string
-		sastSources      []sastSource
-		want             bool
-		wantWithPolicy   bool
+		name                  string
+		required              []scaRequiredStatusCheck
+		sastSources           []sastSource
+		want                  bool
+		wantWithPolicy        bool
+		wantProducerUncertain bool
 	}{
 		{
-			name:             "check context carrying a known SAST identifier matches",
-			requiredContexts: []string{"CodeQL"},
-			sastSources:      []sastSource{{name: "codeql", policyDocumented: true}},
-			want:             true,
-			wantWithPolicy:   true,
+			name:           "workflow check context carrying a known SAST identifier matches",
+			required:       []scaRequiredStatusCheck{{context: "CodeQL"}},
+			sastSources:    []sastSource{{name: "codeql", workflowAlias: true, policyDocumented: true}},
+			want:           true,
+			wantWithPolicy: true,
 		},
 		{
-			name:             "matched source without documented policy is not policy-backed",
-			requiredContexts: []string{"CodeQL"},
-			sastSources:      []sastSource{{name: "codeql"}},
-			want:             true,
-			wantWithPolicy:   false,
+			name:           "Security Insights declaration alone does not satisfy the match",
+			required:       []scaRequiredStatusCheck{{context: "CodeQL"}},
+			sastSources:    []sastSource{{name: "CodeQL", toolID: "codeql", policyDocumented: true}},
+			want:           false,
+			wantWithPolicy: false,
 		},
 		{
-			name:             "policy from an unmatched tool does not make the match policy-backed",
-			requiredContexts: []string{"CodeQL"},
-			sastSources:      []sastSource{{name: "codeql"}, {name: "semgrep", policyDocumented: true}},
-			want:             true,
-			wantWithPolicy:   false,
+			name:           "matched source without documented policy is not policy-backed",
+			required:       []scaRequiredStatusCheck{{context: "CodeQL"}},
+			sastSources:    []sastSource{{name: "codeql", workflowAlias: true}},
+			want:           true,
+			wantWithPolicy: false,
 		},
 		{
-			name:             "check merely containing a known SAST identifier does not match",
-			requiredContexts: []string{"Build CodeQL pack"},
-			sastSources:      []sastSource{{name: "codeql"}},
-			want:             false,
+			name:           "policy from an unmatched tool does not make the match policy-backed",
+			required:       []scaRequiredStatusCheck{{context: "CodeQL"}},
+			sastSources:    []sastSource{{name: "codeql", workflowAlias: true}, {name: "semgrep", workflowAlias: true, policyDocumented: true}},
+			want:           true,
+			wantWithPolicy: false,
 		},
 		{
-			name:             "check context matching a SAST job name matches",
-			requiredContexts: []string{"Security / Analyze"},
-			sastSources:      []sastSource{{name: "codeql"}, {name: "Security / Analyze"}},
-			want:             true,
+			name:                  "app-pinned check matching a workflow context is producer-uncertain rather than matched",
+			required:              []scaRequiredStatusCheck{{context: "Analyze", integrationID: &integrationID}},
+			sastSources:           []sastSource{{name: "Analyze", workflowAlias: true, policyDocumented: true}},
+			want:                  false,
+			wantWithPolicy:        false,
+			wantProducerUncertain: true,
 		},
 		{
-			name:             "generic job component in another workflow does not match",
-			requiredContexts: []string{"Unit Tests / Analyze"},
-			sastSources:      []sastSource{{name: "codeql"}, {name: "Security / Analyze"}},
-			want:             false,
+			name:                  "app-pinned check naming a Security Insights declaration stays unmatched and certain",
+			required:              []scaRequiredStatusCheck{{context: "CodeQL", integrationID: &integrationID}},
+			sastSources:           []sastSource{{name: "CodeQL", toolID: "codeql", policyDocumented: true}},
+			want:                  false,
+			wantWithPolicy:        false,
+			wantProducerUncertain: false,
 		},
 		{
-			name:             "substring of a SAST job name does not match",
-			requiredContexts: []string{"Analyze results"},
-			sastSources:      []sastSource{{name: "Static Analyze"}},
-			want:             false,
+			// The pin only affects its own check entry, so an unpinned check with
+			// the same context still matches. producerUncertain stays true because
+			// the pinned entry did encounter a workflow context; the decision
+			// matrix checks matched first, matching EnforcesSCAOnChanges.
+			name: "pinned check does not stop an unpinned check with the same context from matching",
+			required: []scaRequiredStatusCheck{
+				{context: "Analyze", integrationID: &integrationID},
+				{context: "Analyze"},
+			},
+			sastSources:           []sastSource{{name: "Analyze", workflowAlias: true, policyDocumented: true}},
+			want:                  true,
+			wantWithPolicy:        true,
+			wantProducerUncertain: true,
 		},
 		{
-			name:             "unrelated required check does not match",
-			requiredContexts: []string{"build", "unit-tests"},
-			sastSources:      []sastSource{{name: "codeql"}, {name: "Analyze"}},
-			want:             false,
+			name:        "check merely containing a known SAST identifier does not match",
+			required:    []scaRequiredStatusCheck{{context: "Build CodeQL pack"}},
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}},
+			want:        false,
 		},
 		{
-			name:             "short generic source token does not produce a spurious match",
-			requiredContexts: []string{"lint"},
-			sastSources:      []sastSource{{name: "ci"}},
-			want:             false,
+			name:        "check context matching a SAST job name matches",
+			required:    []scaRequiredStatusCheck{{context: "Security / Analyze"}},
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}, {name: "Security / Analyze", workflowAlias: true}},
+			want:        true,
 		},
 		{
-			name:             "no required contexts cannot match",
-			requiredContexts: nil,
-			sastSources:      []sastSource{{name: "codeql"}},
-			want:             false,
+			name:        "generic job component in another workflow does not match",
+			required:    []scaRequiredStatusCheck{{context: "Unit Tests / Analyze"}},
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}, {name: "Security / Analyze", workflowAlias: true}},
+			want:        false,
+		},
+		{
+			name:        "substring of a SAST job name does not match",
+			required:    []scaRequiredStatusCheck{{context: "Analyze results"}},
+			sastSources: []sastSource{{name: "Static Analyze", workflowAlias: true}},
+			want:        false,
+		},
+		{
+			name:        "unrelated required check does not match",
+			required:    []scaRequiredStatusCheck{{context: "build"}, {context: "unit-tests"}},
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}, {name: "Analyze", workflowAlias: true}},
+			want:        false,
+		},
+		{
+			name:        "short generic source token does not produce a spurious match",
+			required:    []scaRequiredStatusCheck{{context: "lint"}},
+			sastSources: []sastSource{{name: "ci", workflowAlias: true}},
+			want:        false,
+		},
+		{
+			name:        "no required contexts cannot match",
+			required:    nil,
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}},
+			want:        false,
+		},
+		{
+			name:        "blank required context cannot match",
+			required:    []scaRequiredStatusCheck{{context: "  "}},
+			sastSources: []sastSource{{name: "codeql", workflowAlias: true}},
+			want:        false,
 		},
 	}
 
 	for _, test := range tests {
-		got, gotWithPolicy := requiredCheckMatchesSast(test.requiredContexts, test.sastSources)
+		got, gotWithPolicy, gotProducerUncertain := requiredCheckMatchesSast(test.required, test.sastSources)
 		assert.Equal(t, test.want, got, test.name)
 		assert.Equal(t, test.wantWithPolicy, gotWithPolicy, test.name)
+		assert.Equal(t, test.wantProducerUncertain, gotProducerUncertain, test.name)
 	}
 }
 
 func TestEvaluateSastEnforcement(t *testing.T) {
+	integrationID := int64(12345)
 	tests := []struct {
 		name                 string
 		detection            sastDetection
-		requiredContexts     []string
+		required             []scaRequiredStatusCheck
 		protectionObservable bool
 		wantResult           gemara.Result
 	}{
 		{
-			name:             "SAST in CI enforced by a matching required check passes",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}, {name: "Analyze", policyDocumented: true}}},
-			requiredContexts: []string{"Analyze"},
-			wantResult:       gemara.Passed,
+			name: "SAST in CI enforced by a matching required check passes",
+			detection: sastDetection{sources: []sastSource{
+				{name: "codeql", workflowAlias: true, policyDocumented: true},
+				{name: "Analyze", workflowAlias: true, policyDocumented: true},
+			}},
+			required:   []scaRequiredStatusCheck{{context: "Analyze"}},
+			wantResult: gemara.Passed,
 		},
 		{
-			name:             "enforced SAST without a documented policy needs review",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql"}, {name: "Analyze"}}},
-			requiredContexts: []string{"Analyze"},
-			wantResult:       gemara.NeedsReview,
+			name: "enforced SAST without a documented policy needs review",
+			detection: sastDetection{sources: []sastSource{
+				{name: "codeql", workflowAlias: true},
+				{name: "Analyze", workflowAlias: true},
+			}},
+			required:   []scaRequiredStatusCheck{{context: "Analyze"}},
+			wantResult: gemara.NeedsReview,
 		},
 		{
-			name:             "enforced tool without policy does not pass on an unmatched tool's policy",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql"}, {name: "semgrep", policyDocumented: true}}},
-			requiredContexts: []string{"codeql"},
-			wantResult:       gemara.NeedsReview,
+			name: "enforced tool without policy does not pass on an unmatched tool's policy",
+			detection: sastDetection{sources: []sastSource{
+				{name: "codeql", workflowAlias: true},
+				{name: "semgrep", workflowAlias: true, policyDocumented: true},
+			}},
+			required:   []scaRequiredStatusCheck{{context: "codeql"}},
+			wantResult: gemara.NeedsReview,
 		},
 		{
-			name:             "SAST in CI with required checks but no match needs review",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}, {name: "Analyze", policyDocumented: true}}},
-			requiredContexts: []string{"build"},
-			wantResult:       gemara.NeedsReview,
+			name: "SAST in CI with required checks but no match needs review",
+			detection: sastDetection{sources: []sastSource{
+				{name: "codeql", workflowAlias: true, policyDocumented: true},
+				{name: "Analyze", workflowAlias: true, policyDocumented: true},
+			}},
+			required:   []scaRequiredStatusCheck{{context: "build"}},
+			wantResult: gemara.NeedsReview,
 		},
 		{
 			name:                 "SAST in CI with observable absence of required checks fails",
-			detection:            sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
+			detection:            sastDetection{sources: []sastSource{{name: "codeql", workflowAlias: true, policyDocumented: true}}},
 			protectionObservable: true,
 			wantResult:           gemara.Failed,
 		},
 		{
 			name:                 "SAST in CI with unobservable branch protection needs review",
-			detection:            sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}},
+			detection:            sastDetection{sources: []sastSource{{name: "codeql", workflowAlias: true, policyDocumented: true}}},
 			protectionObservable: false,
 			wantResult:           gemara.NeedsReview,
 		},
@@ -669,21 +841,54 @@ func TestEvaluateSastEnforcement(t *testing.T) {
 			wantResult: gemara.NeedsReview,
 		},
 		{
-			name:             "Security Insights evidence cannot pass when workflow coverage is uninspectable",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}, inspectionBlocked: true},
-			requiredContexts: []string{"codeql"},
-			wantResult:       gemara.NeedsReview,
+			// The source is Security Insights-shaped on purpose: the
+			// inspectionBlocked early return must fire before any matching, so
+			// a declaration cannot pass while workflow coverage is unprovable.
+			name:       "Security Insights evidence cannot pass when workflow coverage is uninspectable",
+			detection:  sastDetection{sources: []sastSource{{name: "codeql", toolID: "codeql", policyDocumented: true}}, inspectionBlocked: true},
+			required:   []scaRequiredStatusCheck{{context: "codeql"}},
+			wantResult: gemara.NeedsReview,
 		},
 		{
-			name:             "independently proven workflow coverage can pass despite an unrelated uninspectable workflow",
-			detection:        sastDetection{sources: []sastSource{{name: "codeql", policyDocumented: true}}, inspectionBlocked: true, coverageProven: true},
-			requiredContexts: []string{"codeql"},
-			wantResult:       gemara.Passed,
+			name:       "independently proven workflow coverage can pass despite an unrelated uninspectable workflow",
+			detection:  sastDetection{sources: []sastSource{{name: "codeql", workflowAlias: true, policyDocumented: true}}, inspectionBlocked: true, coverageProven: true},
+			required:   []scaRequiredStatusCheck{{context: "codeql"}},
+			wantResult: gemara.Passed,
+		},
+		{
+			name: "Security Insights declaration plus a name-coincident required check does not pass",
+			detection: sastDetection{sources: []sastSource{
+				{name: "CodeQL", toolID: "codeql", policyDocumented: true},
+			}},
+			required:             []scaRequiredStatusCheck{{context: "CodeQL"}},
+			protectionObservable: true,
+			wantResult:           gemara.NeedsReview,
+		},
+		{
+			name: "app-pinned required check is not trusted by context alone",
+			detection: sastDetection{sources: []sastSource{
+				{name: "Analyze", workflowAlias: true, policyDocumented: true},
+			}},
+			required:             []scaRequiredStatusCheck{{context: "Analyze", integrationID: &integrationID}},
+			protectionObservable: true,
+			wantResult:           gemara.NeedsReview,
+		},
+		{
+			name: "an unpinned matching check still passes beside an app-pinned one",
+			detection: sastDetection{sources: []sastSource{
+				{name: "Analyze", workflowAlias: true, policyDocumented: true},
+			}},
+			required: []scaRequiredStatusCheck{
+				{context: "Analyze", integrationID: &integrationID},
+				{context: "Analyze"},
+			},
+			protectionObservable: true,
+			wantResult:           gemara.Passed,
 		},
 	}
 
 	for _, test := range tests {
-		result, message, _ := evaluateSastEnforcement(test.detection, test.requiredContexts, test.protectionObservable)
+		result, message, _ := evaluateSastEnforcement(test.detection, test.required, test.protectionObservable)
 		assert.Equal(t, test.wantResult, result, test.name)
 		assert.NotEmpty(t, message, test.name)
 	}
