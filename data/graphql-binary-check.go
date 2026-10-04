@@ -224,7 +224,7 @@ func acceptableBinaryExtension(path string) bool {
 		// Documents
 		".pdf", ".docx", ".doc", ".pptx", ".xlsx",
 		// Design source assets (image / design-tool source files, same category as images)
-		".ai", ".sketch", ".psd", ".graffle",
+		".ai", ".eps", ".sketch", ".psd", ".graffle",
 	}
 	return slices.Contains(extensions, ext)
 }

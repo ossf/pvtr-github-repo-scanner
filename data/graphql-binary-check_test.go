@@ -783,6 +783,7 @@ func TestAcceptableBinaryExtension(t *testing.T) {
 		{name: "double dot docx", path: "vFabric..docx", expected: true},
 		// Design source assets — acceptable
 		{name: "ai illustrator", path: "logo.ai", expected: true},
+		{name: "eps vector", path: "logo.eps", expected: true},
 		{name: "sketch design", path: "nginx-ui-logo-design.sketch", expected: true},
 		{name: "psd photoshop", path: "24pullrequests.psd", expected: true},
 		{name: "graffle diagram", path: "imposter.graffle", expected: true},
@@ -853,7 +854,7 @@ func TestCheckUnreviewable(t *testing.T) {
 	})
 
 	t.Run("binary design asset not flagged", func(t *testing.T) {
-		for _, path := range []string{"logo.ai", "nginx-ui-logo-design.sketch", "art.psd", "diagram.graffle"} {
+		for _, path := range []string{"logo.ai", "logo.eps", "nginx-ui-logo-design.sketch", "art.psd", "diagram.graffle"} {
 			result, err := bc.checkUnreviewable(boolPtr(true), false, path)
 			if err != nil {
 				t.Errorf("checkUnreviewable() error = %v", err)
