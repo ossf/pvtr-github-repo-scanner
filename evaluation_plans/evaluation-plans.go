@@ -239,7 +239,8 @@ var (
 			vuln_management.HasSCAReleasePolicy,
 		},
 		"OSPS-VM-06.01": {
-			reusable_steps.HasDependencyManagementPolicy,
+			reusable_steps.IsCodeRepo,
+			vuln_management.HasSASTRemediationThresholdPolicy,
 		},
 		"OSPS-VM-06.02": {
 			reusable_steps.IsCodeRepo,

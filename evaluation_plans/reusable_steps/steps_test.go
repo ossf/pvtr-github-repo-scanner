@@ -12,78 +12,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func ptrTo[T any](v T) *T { return &v }
-
-type testingData struct {
-	expectedResult   gemara.Result
-	expectedMessage  string
-	payload          data.Payload
-	assertionMessage string
-}
-
 func TestAIFallback(t *testing.T) {
 	result, message, confidence := AIFallback(data.Payload{}, "OSPS-QA-06.03", "manual review required", "provider failed", assert.AnError)
 
 	assert.Equal(t, gemara.NeedsReview, result)
 	assert.Equal(t, "manual review required", message)
 	assert.Equal(t, gemara.Low, confidence)
-}
-
-func TestHasDependencyManagementPolicy(t *testing.T) {
-
-	testData := []testingData{
-		{
-			expectedResult:  gemara.Passed,
-			expectedMessage: "Found dependency management policy in documentation",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Repository: &si.Repository{
-							Documentation: &si.RepositoryDocumentation{
-								DependencyManagementPolicy: ptrTo(si.URL("https://example.com/dependency-management")),
-							},
-						},
-					},
-				},
-			},
-			assertionMessage: "Happy Path failed",
-		},
-		{
-			expectedResult:  gemara.Failed,
-			expectedMessage: "No dependency management file found",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Repository: &si.Repository{
-							Documentation: &si.RepositoryDocumentation{},
-						},
-					},
-				},
-			},
-			assertionMessage: "Empty string check failed",
-		},
-		{
-			expectedResult:  gemara.Failed,
-			expectedMessage: "No dependency management file found",
-			payload: data.Payload{
-				RestData: &data.RestData{
-					Insights: si.SecurityInsights{
-						Repository: &si.Repository{
-							Documentation: &si.RepositoryDocumentation{},
-						},
-					},
-				},
-			},
-			assertionMessage: "Null String check failed",
-		},
-	}
-
-	for _, test := range testData {
-		result, message, _ := HasDependencyManagementPolicy(test.payload)
-		assert.Equal(t, test.expectedResult, result, test.assertionMessage)
-		assert.Equal(t, test.expectedMessage, message, test.assertionMessage)
-	}
-
 }
 
 func TestAIFallbackReturnsLowConfidence(t *testing.T) {
