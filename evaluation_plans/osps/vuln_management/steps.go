@@ -765,10 +765,15 @@ func HasVexDocument(payload data.Payload) (result gemara.Result, message string,
 	return gemara.NeedsReview, "No VEX document was found in the repository; confirm manually whether non-affecting vulnerabilities are accounted for in a VEX document", gemara.Low
 }
 
+const (
+	severityWords    = `(?:critical|high|medium|moderate|low)`
+	sastFindingWords = `(?:findings?|alerts?|issues?|weakness(?:es)?|vulnerabilit(?:y|ies)|defects?|violations?)`
+)
+
 var (
 	scaAcronymPattern             = regexp.MustCompile(`(?:^|[^0-9a-z])sca(?:[^0-9a-z]|$)`)
 	sastContextPattern            = regexp.MustCompile(`\b(?:sast|static application security testing|static (?:code )?analysis|code scanning|codeql|semgrep)\b`)
-	sastFindingPattern            = regexp.MustCompile(`\b(?:findings?|alerts?|issues?|weakness(?:es)?|vulnerabilit(?:y|ies)|defects?|violations?)\b`)
+	sastFindingPattern            = regexp.MustCompile(`\b` + sastFindingWords + `\b`)
 	policyNegationPattern         = regexp.MustCompile(`\b(?:do(?:es)? not|not required|need not|no requirement|optional|informational only)\b`)
 	policyObligationPattern       = regexp.MustCompile(`\b(?:must|shall|required|requires|will block|is blocked|are blocked)\b`)
 	vulnerabilityPattern          = regexp.MustCompile(`\bvulnerabilit(?:y|ies)\b`)
@@ -788,6 +793,16 @@ var (
 	negatedRemediationPattern     = regexp.MustCompile(`\bnot\s+(?:be\s+)?(?:address(?:ed)?|remediat(?:e|ed)?|resolv(?:e|ed)?|fix(?:ed)?|remov(?:e|ed)?|replac(?:e|ed)?|reject(?:ed)?|block(?:ed)?)\b`)
 	sentenceSplitPattern          = regexp.MustCompile(`[.!?;]+(?:\s+|$)`)
 )
+
+// sastThresholdPattern is stricter than vulnerabilityThresholdPattern. SAST
+// finding nouns such as "issues" are generic, so a severity word only counts
+// when it qualifies the finding ("high findings", "high severity", "rated
+// high"), not when it appears elsewhere ("keep quality high", "low-level").
+var sastThresholdPattern = regexp.MustCompile(`\b` + severityWords + `(?:[- ]severity)?\s+(?:(?:sast|codeql|semgrep|static analysis|code scanning)\s+)?` + sastFindingWords + `\b` +
+	`|\b` + severityWords + `[- ]severity\b` +
+	`|\b(?:severity|rated)\s+(?:of\s+|as\s+)?` + severityWords + `\b` +
+	`|\bcvss\b\s*(?:score\s*)?(?:>=|>|at least)\s*[0-9]+(?:\.[0-9]+)?` +
+	`|\bwithin\s+[0-9]+\s+(?:hour|day|week|month)s?\b`)
 
 var scaToolKeywords = []string{"software composition", "dependency scanning", "dependency analysis", "composition analysis"}
 
@@ -1511,18 +1526,19 @@ func hasSCARemediationThreshold(section string) bool {
 // hasSASTRemediationThreshold reports whether a documentation section about
 // static analysis contains a statement obliging findings to be remediated at a
 // stated severity or within a stated time. SAST context is matched per section,
-// not per statement, so a section that covers both SAST and dependency scanning
-// can be credited for a threshold written about dependencies.
+// not per statement, so statements about dependencies or SCA are skipped to keep
+// a dependency threshold in a mixed section from being credited.
 func hasSASTRemediationThreshold(section string) bool {
 	if !sastContextPattern.MatchString(section) {
 		return false
 	}
 	for _, statement := range policyStatements(section) {
 		if !statementNegated(statement) &&
+			!hasSCAContext(statement) && !strings.Contains(statement, "dependenc") &&
 			policyObligationPattern.MatchString(statement) &&
 			remediationPattern.MatchString(statement) &&
 			sastFindingPattern.MatchString(statement) &&
-			vulnerabilityThresholdPattern.MatchString(statement) {
+			sastThresholdPattern.MatchString(statement) {
 			return true
 		}
 	}
@@ -1641,9 +1657,9 @@ func HasSCARemediationThresholdPolicy(payload data.Payload) (result gemara.Resul
 }
 
 // HasSASTRemediationThresholdPolicy evaluates whether the project documents a
-// severity threshold at which SAST findings must be remediated, using the text
-// of repository documentation. A configured SAST tool is not credited because it
-// does not expose the required threshold language.
+// severity or time threshold at which SAST findings must be remediated, using
+// the text of repository documentation. A configured SAST tool is not credited
+// because it does not expose the required threshold language.
 func HasSASTRemediationThresholdPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	files, docsErr := repositoryDocumentation(payload)
 	if path, contradicted := findDocumentationPolicy(files, hasSASTRemediationThreshold); path != "" {

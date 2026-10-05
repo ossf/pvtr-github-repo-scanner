@@ -62,6 +62,30 @@ func TestHasSASTRemediationThresholdPolicyReadsRepositoryDocumentation(t *testin
 			gemara.Failed,
 		},
 		{
+			"severity word adjacent to finding passes",
+			"SECURITY.md",
+			"# SAST\n\nWe run CodeQL on all pull requests. High and critical findings must be fixed before release.\n",
+			gemara.Passed,
+		},
+		{
+			"bare severity word is not a threshold",
+			"README.md",
+			"# Contributing\n\nWe run static analysis in CI. All issues must be fixed to keep code quality high.\n",
+			gemara.Failed,
+		},
+		{
+			"severity word inside a compound is not a threshold",
+			"README.md",
+			"# Contributing\n\nWe use CodeQL. Pull requests must address review issues in low-level code.\n",
+			gemara.Failed,
+		},
+		{
+			"dependency threshold in a SAST section does not pass",
+			"SECURITY.md",
+			"# Security\n\nWe run CodeQL on every PR. Critical vulnerabilities in dependencies must be fixed within 7 days.\n",
+			gemara.Failed,
+		},
+		{
 			"contradictory section needs review",
 			"SECURITY.md",
 			"# SAST\n\nHigh severity SAST findings must be fixed within 30 days. Remediation is optional for experimental modules.\n",
