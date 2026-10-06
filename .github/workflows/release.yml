@@ -14,7 +14,7 @@ jobs:
       attestations: write   # release_goreleaser, release_image: build provenance
       packages: write       # release_image: push container image
       discussions: write    # release_discussion: declared by reusable even when skipped
-    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@a48c75fafbf2513929ff2ce06dfaa38247ddc50b # v2.1.0
+    uses: github-community-projects/ospo-reusable-workflows/.github/workflows/release.yaml@690dbbefe65f0c1d68c5211dd6ff997f533099b5 # v2.2.0
     with:
       publish: true
       release-only-with-label: true
