@@ -59,14 +59,6 @@ func HasIssuesOrDiscussionsEnabled(payload data.Payload) (result gemara.Result, 
 	return gemara.Failed, "Both issues and discussions are disabled for the repository", confidence
 }
 
-func HasDependencyManagementPolicy(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if payload.Insights.Repository.Documentation.DependencyManagementPolicy != nil {
-		return gemara.Passed, "Found dependency management policy in documentation", confidence
-	}
-
-	return gemara.Failed, "No dependency management file found", confidence
-}
-
 func IsCodeRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if !payload.IsCodeRepo {
 		return gemara.NotApplicable, "Repository does not contain code", confidence
