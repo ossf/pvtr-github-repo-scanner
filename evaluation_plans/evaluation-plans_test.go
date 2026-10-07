@@ -205,3 +205,40 @@ func TestCatalogApplicabilityMatchesConfigs(t *testing.T) {
 		}
 	}
 }
+
+// TestDispatchMapIDsExistInACatalog is the reverse of
+// TestAllCatalogAssessmentIDsHaveSteps. A dispatch map entry whose ID is in no
+// bundled catalog can never run, which usually means the catalog data is
+// missing a requirement the scanner already implements (or the ID is a typo).
+func TestDispatchMapIDsExistInACatalog(t *testing.T) {
+	catalogDir := filepath.Join("..", "data", "catalogs")
+	entries, err := os.ReadDir(catalogDir)
+	if err != nil {
+		t.Fatalf("failed to read catalog directory: %v", err)
+	}
+
+	catalogIDs := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(catalogDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("failed to read catalog %s: %v", entry.Name(), err)
+		}
+		var catalog gemara.ControlCatalog
+		if err := yaml.Unmarshal(raw, &catalog); err != nil {
+			t.Fatalf("failed to parse catalog %s: %v", entry.Name(), err)
+		}
+		for _, control := range catalog.Controls {
+			for _, req := range control.AssessmentRequirements {
+				catalogIDs[req.Id] = true
+			}
+		}
+	}
+
+	for id := range OSPS {
+		assert.True(t, catalogIDs[id],
+			"dispatch map entry %s does not exist in any bundled catalog, so it can never run", id)
+	}
+}
