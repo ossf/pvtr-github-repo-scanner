@@ -1,11 +1,13 @@
 package data
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"testing"
 
 	"github.com/google/go-github/v74/github"
@@ -87,6 +89,57 @@ func TestCheckFile(t *testing.T) {
 			}
 			result := rest.checkFile(tt.filename)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFindSecurityInsightsFile(t *testing.T) {
+	file := func(p string) *github.RepositoryContent {
+		return &github.RepositoryContent{Type: github.Ptr("file"), Name: github.Ptr(path.Base(p)), Path: github.Ptr(p)}
+	}
+	tests := []struct {
+		name        string
+		toplevel    []*github.RepositoryContent
+		githubDir   []*github.RepositoryContent
+		expected    string
+		wantWarning bool
+	}{
+		{name: "none", expected: ""},
+		{name: "yml in root", toplevel: []*github.RepositoryContent{file("security-insights.yml")}, expected: "security-insights.yml"},
+		{name: "yaml in root", toplevel: []*github.RepositoryContent{file("security-insights.yaml")}, expected: "security-insights.yaml"},
+		{name: "yaml in forge directory", githubDir: []*github.RepositoryContent{file(".github/security-insights.yaml")}, expected: ".github/security-insights.yaml"},
+		{
+			name:        "both in root reads yml and warns",
+			toplevel:    []*github.RepositoryContent{file("security-insights.yaml"), file("security-insights.yml")},
+			expected:    "security-insights.yml",
+			wantWarning: true,
+		},
+		{
+			name:      "root yaml wins over forge yml",
+			toplevel:  []*github.RepositoryContent{file("security-insights.yaml")},
+			githubDir: []*github.RepositoryContent{file(".github/security-insights.yml")},
+			expected:  "security-insights.yaml",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			rest := &RestData{
+				Config: &config.Config{Logger: hclog.New(&hclog.LoggerOptions{Output: &logs})},
+				contents: RepoContent{
+					Content: tt.toplevel,
+					SubContent: map[string]RepoContent{
+						".github": {Content: tt.githubDir},
+					},
+				},
+			}
+			assert.Equal(t, tt.expected, rest.findSecurityInsightsFile())
+			if tt.wantWarning {
+				assert.Contains(t, logs.String(), "Keep only one Security Insights file")
+			} else {
+				assert.Empty(t, logs.String())
+			}
 		})
 	}
 }
