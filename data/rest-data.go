@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 
@@ -462,9 +463,34 @@ func parseMarkdownHeadings(content []byte) []string {
 	return headings
 }
 
+// findSecurityInsightsFile returns the path to the Security Insights file, or
+// "" when there is none. The spec accepts both .yml and .yaml. A file in the
+// root directory wins over one in the forge directory, as with checkFile. When
+// one directory holds both extensions, the .yml file wins with a warning.
+func (r *RestData) findSecurityInsightsFile() string {
+	var found []string
+	for _, name := range si.SecurityInsightsFilenames() {
+		if p := r.checkFile(name); p != "" {
+			found = append(found, p)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	best := found[0]
+	for _, p := range found[1:] {
+		if path.Dir(p) == path.Dir(best) {
+			r.logger().Warn(fmt.Sprintf("found both %s and %s; reading %s. Keep only one Security Insights file", best, p, best))
+		} else if path.Dir(p) == "." {
+			best = p
+		}
+	}
+	return best
+}
+
 func (r *RestData) loadSecurityInsights() error {
 	var readErr error
-	filepath := r.checkFile(si.SecurityInsightsFilename)
+	filepath := r.findSecurityInsightsFile()
 	if filepath != "" {
 		insights, err := si.Read(r.owner, r.repo, filepath)
 		r.Insights = insights
