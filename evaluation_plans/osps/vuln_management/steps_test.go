@@ -580,6 +580,189 @@ func TestUnpinnedSastRequiredCheckStillPassesBesidePinnedOne(t *testing.T) {
 	assert.Equal(t, gemara.Passed, result, message)
 }
 
+const sastJobHeader = `name: CodeQL
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+`
+
+// TestSkippedOrNonBlockingSastJobNeedsReview covers #496: GitHub treats a
+// skipped job as satisfying a required check, and continue-on-error reports
+// success whatever the scanner finds, so neither shape proves SAST blocks merges.
+func TestSkippedOrNonBlockingSastJobNeedsReview(t *testing.T) {
+	tests := []struct {
+		name           string
+		files          []data.WorkflowFile
+		requiredCheck  string
+		wantResult     gemara.Result
+		wantConfidence gemara.ConfidenceLevel
+		wantMessage    string
+	}{
+		{
+			name: "job disabled with if false",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    if: false
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "job disabled with a false expression",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    if: ${{ false }}
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "job continue-on-error",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    continue-on-error: true
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "SAST step disabled with if false",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    steps:
+      - uses: github/codeql-action/analyze@v3
+        if: false
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "SAST step continue-on-error",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    steps:
+      - uses: github/codeql-action/analyze@v3
+        continue-on-error: true
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "local reusable caller disabled with if false",
+			files: []data.WorkflowFile{
+				yml("caller.yml", `name: Security
+on: [pull_request]
+jobs:
+  sast:
+    name: Analyze
+    if: false
+    uses: ./.github/workflows/reusable-sast.yml
+`),
+				yml("reusable-sast.yml", reusableSastWorkflow),
+			},
+			requiredCheck:  "Analyze / analyze",
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "remote reusable caller disabled with if false",
+			files: []data.WorkflowFile{yml("caller.yml", `name: Security
+on: [pull_request]
+jobs:
+  sast:
+    name: Analyze
+    if: false
+    uses: org/security/.github/workflows/codeql.yml@v1
+`)},
+			requiredCheck:  "codeql",
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Medium,
+			wantMessage:    "disabled or allowed to succeed",
+		},
+		{
+			name: "dynamic job condition cannot be evaluated",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    if: github.event_name != 'schedule'
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Low,
+			wantMessage:    "inspection was incomplete",
+		},
+		{
+			name: "dynamic continue-on-error cannot be evaluated",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`)},
+			wantResult:     gemara.NeedsReview,
+			wantConfidence: gemara.Low,
+			wantMessage:    "inspection was incomplete",
+		},
+		{
+			name: "literal true condition and continue-on-error false still pass",
+			files: []data.WorkflowFile{yml("codeql.yml", sastJobHeader+`    if: ${{ true }}
+    continue-on-error: false
+    steps:
+      - uses: github/codeql-action/analyze@v3
+        if: true
+        continue-on-error: false
+`)},
+			wantResult:     gemara.Passed,
+			wantConfidence: gemara.High,
+		},
+		{
+			name: "an active job still passes beside a disabled one",
+			files: []data.WorkflowFile{
+				yml("codeql.yml", codeqlWorkflow),
+				yml("legacy.yml", `name: Legacy
+on: [pull_request]
+jobs:
+  legacy:
+    name: Legacy scan
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/codeql-action/analyze@v3
+`),
+			},
+			wantResult:     gemara.Passed,
+			wantConfidence: gemara.High,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := withWorkflows(observedPayload(), test.files...)
+			payload.Insights.Repository.SecurityPosture.Tools = []si.SecurityTool{{
+				Name:        "CodeQL",
+				Type:        "SAST",
+				Rulesets:    []string{"default"},
+				Integration: si.SecurityToolIntegration{Ci: true},
+			}}
+			requiredCheck := test.requiredCheck
+			if requiredCheck == "" {
+				requiredCheck = "Analyze"
+			}
+			payload.RepositoryMetadata = &fakeRequiredChecksMetadata{
+				requiredChecks: []string{requiredCheck},
+				admin:          true,
+			}
+
+			result, message, confidence := SastEnforcedOnChanges(payload)
+			assert.Equal(t, test.wantResult, result, message)
+			assert.Equal(t, test.wantConfidence, confidence, message)
+			assert.Contains(t, message, test.wantMessage)
+		})
+	}
+}
+
 func TestMatchesGitHubGlob(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -783,6 +966,12 @@ func TestEvaluateSastEnforcement(t *testing.T) {
 		protectionObservable bool
 		wantResult           gemara.Result
 	}{
+		{
+			name:       "a disabled or non-blocking SAST job alone needs review rather than failing as absent",
+			detection:  sastDetection{nonBlockingObserved: true},
+			required:   []scaRequiredStatusCheck{{context: "Analyze"}},
+			wantResult: gemara.NeedsReview,
+		},
 		{
 			name: "SAST in CI enforced by a matching required check passes",
 			detection: sastDetection{sources: []sastSource{

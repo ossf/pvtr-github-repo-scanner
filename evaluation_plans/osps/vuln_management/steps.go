@@ -347,6 +347,9 @@ type sastDetection struct {
 	sources           []sastSource
 	inspectionBlocked bool
 	coverageProven    bool
+	// nonBlockingObserved records a SAST job or step that is disabled or
+	// allowed to succeed after scanner failure, so it cannot block merges.
+	nonBlockingObserved bool
 }
 
 // detectSastToolInInsights identifies SAST tools integrated into continuous
@@ -399,42 +402,56 @@ func detectSastInWorkflows(files []data.WorkflowFile, defaultBranch string) sast
 		parsed[strings.TrimPrefix(file.Path, "./")] = workflow
 	}
 
-	var inspectJob func(*actionlint.Job, map[string]bool) ([]string, bool)
-	inspectJob = func(job *actionlint.Job, visiting map[string]bool) ([]string, bool) {
-		if id := jobUsesSast(job); id != "" {
-			return []string{id}, false
+	var inspectJob func(*actionlint.Job, map[string]bool) ([]string, bool, bool)
+	inspectJob = func(job *actionlint.Job, visiting map[string]bool) ([]string, bool, bool) {
+		if id, stepBlocked, stepNonBlocking := jobUsesSast(job); id != "" || stepBlocked || stepNonBlocking {
+			if blocked, nonBlocking := sastJobGate(job); blocked || nonBlocking {
+				return nil, blocked, nonBlocking
+			}
+			if id == "" {
+				return nil, stepBlocked, stepNonBlocking
+			}
+			return []string{id}, false, false
 		}
 		if job.WorkflowCall == nil || job.WorkflowCall.Uses == nil {
-			return nil, false
+			return nil, false, false
 		}
 
 		uses := strings.TrimSpace(job.WorkflowCall.Uses.Value)
 		if id := matchSast(uses); id != "" {
-			return []string{id}, false
+			if blocked, nonBlocking := sastJobGate(job); blocked || nonBlocking {
+				return nil, blocked, nonBlocking
+			}
+			return []string{id}, false, false
 		}
 		if !strings.HasPrefix(uses, "./") {
-			return nil, true
+			return nil, true, false
 		}
 
 		path := strings.TrimPrefix(uses, "./")
 		if visiting[path] {
-			return nil, true
+			return nil, true, false
 		}
 		called, ok := parsed[path]
 		if !ok {
-			return nil, true
+			return nil, true, false
 		}
 		visiting[path] = true
 		defer delete(visiting, path)
 
-		blocked := false
+		blocked, nonBlocking := false, false
 		for _, calledJob := range called.Jobs {
 			if calledJob == nil {
 				continue
 			}
-			sources, callBlocked := inspectJob(calledJob, visiting)
+			sources, callBlocked, callNonBlocking := inspectJob(calledJob, visiting)
 			blocked = blocked || callBlocked
+			nonBlocking = nonBlocking || callNonBlocking
 			if len(sources) > 0 {
+				// The caller's own condition gates every job it calls.
+				if gateBlocked, gateNonBlocking := sastJobGate(job); gateBlocked || gateNonBlocking {
+					return nil, blocked || gateBlocked, nonBlocking || gateNonBlocking
+				}
 				// GitHub publishes a called job's check as its name, or its ID
 				// when unnamed, matching the caller-side preference below.
 				if calledJob.Name != nil && calledJob.Name.Value != "" {
@@ -442,10 +459,10 @@ func detectSastInWorkflows(files []data.WorkflowFile, defaultBranch string) sast
 				} else if calledJob.ID != nil && calledJob.ID.Value != "" {
 					sources = append(sources, calledJob.ID.Value)
 				}
-				return sources, blocked
+				return sources, blocked, nonBlocking
 			}
 		}
-		return nil, blocked
+		return nil, blocked, nonBlocking
 	}
 
 	for path, workflow := range parsed {
@@ -459,8 +476,9 @@ func detectSastInWorkflows(files []data.WorkflowFile, defaultBranch string) sast
 			if job == nil {
 				continue
 			}
-			sources, blocked := inspectJob(job, map[string]bool{path: true})
+			sources, blocked, nonBlocking := inspectJob(job, map[string]bool{path: true})
 			detection.inspectionBlocked = detection.inspectionBlocked || blocked
+			detection.nonBlockingObserved = detection.nonBlockingObserved || nonBlocking
 			if len(sources) == 0 {
 				continue
 			}
@@ -525,34 +543,76 @@ func associateSastPolicies(sources []sastSource) {
 	}
 }
 
+// sastJobGate reports whether a SAST job's own `if:` or `continue-on-error`
+// keeps it from blocking merges. GitHub treats a skipped job as satisfying a
+// required check, and continue-on-error reports success whatever the scanner
+// finds, so either makes the job non-blocking. An expression the scanner cannot
+// evaluate leaves the outcome unknown, so inspection is reported as blocked.
+func sastJobGate(job *actionlint.Job) (blocked bool, nonBlocking bool) {
+	enabled, uncertain := conditionState(job.If)
+	if uncertain {
+		return true, false
+	}
+	if !enabled {
+		return false, true
+	}
+	suppressed, uncertain := continueOnErrorState(job.ContinueOnError)
+	if uncertain {
+		return true, false
+	}
+	return false, suppressed
+}
+
 // jobUsesSast returns the SAST identifier a job invokes via a step's `uses:`
 // action reference or `run:` command, or the empty string when none is found. A
 // `uses:` reference names the tool directly, so a substring match is definite.
 // `run:` scripts are free text, so the identifier must appear as a command token
 // (see matchSastCommand); a mere mention such as an echoed TODO or an
 // Authorization: Bearer header is deliberately not treated as an invocation.
-// Step names are cosmetic and are intentionally not used as evidence.
-func jobUsesSast(job *actionlint.Job) string {
+// Step names are cosmetic and are intentionally not used as evidence. A SAST
+// step whose `if:` or `continue-on-error` cannot be evaluated sets blocked, and
+// one that is disabled or allowed to fail sets nonBlocking; neither counts as
+// an invocation.
+func jobUsesSast(job *actionlint.Job) (id string, blocked bool, nonBlocking bool) {
 	for _, step := range job.Steps {
 		if step == nil {
 			continue
 		}
+		stepID := ""
 		switch exec := step.Exec.(type) {
 		case *actionlint.ExecAction:
 			if exec.Uses != nil {
-				if id := matchSast(exec.Uses.Value); id != "" {
-					return id
-				}
+				stepID = matchSast(exec.Uses.Value)
 			}
 		case *actionlint.ExecRun:
 			if exec.Run != nil {
-				if id := matchSastCommand(exec.Run.Value); id != "" {
-					return id
-				}
+				stepID = matchSastCommand(exec.Run.Value)
 			}
 		}
+		if stepID == "" {
+			continue
+		}
+		enabled, uncertain := conditionState(step.If)
+		if uncertain {
+			blocked = true
+			continue
+		}
+		if !enabled {
+			nonBlocking = true
+			continue
+		}
+		suppressed, uncertain := continueOnErrorState(step.ContinueOnError)
+		if uncertain {
+			blocked = true
+			continue
+		}
+		if suppressed {
+			nonBlocking = true
+			continue
+		}
+		return stepID, false, false
 	}
-	return ""
+	return "", blocked, nonBlocking
 }
 
 // requiredCheckMatchesSast reports whether a required status-check context
@@ -614,6 +674,7 @@ func SastEnforcedOnChanges(payload data.Payload) (result gemara.Result, message 
 		detection.sources = append(detection.sources, workflowDetection.sources...)
 		detection.inspectionBlocked = workflowDetection.inspectionBlocked
 		detection.coverageProven = workflowDetection.coverageProven
+		detection.nonBlockingObserved = workflowDetection.nonBlockingObserved
 	}
 	associateSastPolicies(detection.sources)
 
@@ -644,7 +705,7 @@ func evaluateSastEnforcement(detection sastDetection, required []scaRequiredStat
 	if detection.inspectionBlocked && !detection.coverageProven {
 		return gemara.NeedsReview, "Workflow inspection was incomplete, so the scanner could not determine whether SAST runs on all changes", gemara.Low
 	}
-	if len(detection.sources) == 0 {
+	if len(detection.sources) == 0 && !detection.nonBlockingObserved {
 		return gemara.Failed, "No Static Application Security Testing runs on changes, in Security Insights or a CI workflow triggered by pull requests or pushes", gemara.Medium
 	}
 
@@ -657,6 +718,9 @@ func evaluateSastEnforcement(detection sastDetection, required []scaRequiredStat
 	}
 	if producerUncertain {
 		return gemara.NeedsReview, "A SAST workflow context matches a required ruleset check, but that check is pinned to a GitHub App whose identity could not be correlated to the workflow producer", gemara.Medium
+	}
+	if detection.nonBlockingObserved {
+		return gemara.NeedsReview, "A SAST scanner is present but is disabled or allowed to succeed after scanner failure; confirm violations actually block changes", gemara.Medium
 	}
 
 	if len(required) > 0 {
