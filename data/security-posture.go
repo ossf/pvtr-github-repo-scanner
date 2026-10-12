@@ -99,12 +99,16 @@ func definesSecretsHandlingPolicy(rd RestData) bool {
 	return false
 }
 
+// insightsClaimsSecretsTooling reports whether Security Insights declares a
+// secret-scanning tool. Security Insights v2.2.0 defines the tool type as
+// "secret"; "secret-scanning" is not a schema value but is still accepted so
+// existing manifests that use it keep working.
 func insightsClaimsSecretsTooling(insights si.SecurityInsights) bool {
 	if insights.Repository == nil || insights.Repository.SecurityPosture.Tools == nil {
 		return false
 	}
 	for _, tool := range insights.Repository.SecurityPosture.Tools {
-		if tool.Type == "secret-scanning" {
+		if tool.Type == "secret" || tool.Type == "secret-scanning" {
 			return true
 		}
 	}

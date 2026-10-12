@@ -68,7 +68,7 @@ repository:
     # OSPS-BR-07.01: declare the secret-scanning tooling enabled on this repository.
     tools:
       - name: GitHub Secret Scanning
-        type: secret-scanning
+        type: secret
         rulesets:
           - default
         comment: |

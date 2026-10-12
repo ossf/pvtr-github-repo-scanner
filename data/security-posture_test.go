@@ -65,7 +65,7 @@ func TestBuildSecurityPosture_NilSecurityConfig_WithInsightsSecretScanning(t *te
 			Repository: &si.Repository{
 				SecurityPosture: si.SecurityPosture{
 					Tools: []si.SecurityTool{
-						{Type: "secret-scanning"},
+						{Type: "secret"},
 					},
 				},
 			},
@@ -133,25 +133,43 @@ func TestBuildSecurityPosture_SecretScanningDisabledButInsightsTooling(t *testin
 }
 
 func TestInsightsClaimsSecretsTooling(t *testing.T) {
-	insights := si.SecurityInsights{
-		Repository: &si.Repository{
-			SecurityPosture: si.SecurityPosture{
-				Tools: []si.SecurityTool{
-					{Type: "secret-scanning"},
-					{Type: "other-tool"},
-				},
-			},
+	testCases := []struct {
+		name     string
+		tools    []si.SecurityTool
+		expected bool
+	}{
+		{
+			name:     "schema-defined secret type",
+			tools:    []si.SecurityTool{{Type: "secret"}, {Type: "other-tool"}},
+			expected: true,
+		},
+		{
+			name:     "legacy secret-scanning alias",
+			tools:    []si.SecurityTool{{Type: "secret-scanning"}, {Type: "other-tool"}},
+			expected: true,
+		},
+		{
+			name:     "unrelated tool types",
+			tools:    []si.SecurityTool{{Type: "SAST"}, {Type: "SCA"}, {Type: "other-tool"}},
+			expected: false,
+		},
+		{
+			name:     "no tools",
+			tools:    nil,
+			expected: false,
 		},
 	}
-	assert.True(t, insightsClaimsSecretsTooling(insights))
 
-	insights.Repository.SecurityPosture.Tools = []si.SecurityTool{
-		{Type: "other-tool"},
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			insights := si.SecurityInsights{
+				Repository: &si.Repository{
+					SecurityPosture: si.SecurityPosture{Tools: tc.tools},
+				},
+			}
+			assert.Equal(t, tc.expected, insightsClaimsSecretsTooling(insights))
+		})
 	}
-	assert.False(t, insightsClaimsSecretsTooling(insights))
-
-	insights.Repository.SecurityPosture.Tools = nil
-	assert.False(t, insightsClaimsSecretsTooling(insights))
 }
 
 func TestDefinesSecretsHandlingPolicy(t *testing.T) {
