@@ -900,7 +900,9 @@ func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result
 // signatureAssetKinds maps each release-asset suffix to the artifact kind a
 // passing result should name. The suffixes mirror Scorecard's Signed-Releases
 // check (which BR-06 maps to), plus detached GPG signatures (.gpg/.pgp) that its
-// .asc-only list omits. The sets are disjoint, so match order is irrelevant.
+// .asc-only list omits, and Helm provenance files (.prov): PGP clearsigned
+// documents that `helm package --sign` writes next to each chart archive. The
+// sets are disjoint, so match order is irrelevant.
 var signatureAssetKinds = []struct {
 	kind     string
 	suffixes []string
@@ -908,6 +910,7 @@ var signatureAssetKinds = []struct {
 	{"an in-toto/SLSA provenance attestation", []string{".intoto.jsonl"}},
 	{"a Sigstore bundle", []string{".sigstore", ".sigstore.json"}},
 	{"a cryptographic signature", []string{".sig", ".asc", ".sign", ".minisig", ".gpg", ".pgp"}},
+	{"a Helm provenance file", []string{".prov"}},
 }
 
 // A checksum manifest accounts for each asset's hash but does not prove it is

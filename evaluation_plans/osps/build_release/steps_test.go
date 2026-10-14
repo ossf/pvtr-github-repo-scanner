@@ -94,6 +94,14 @@ func TestReleasesAreSignedOrAttested(t *testing.T) {
 			expectedMsgContains: "an in-toto/SLSA provenance attestation",
 		},
 		{
+			// Real argoproj/argo-helm naming: `helm package --sign` writes a
+			// PGP clearsigned provenance file next to the chart archive.
+			name:                "Helm provenance file passes",
+			payload:             releasePayload("", "argo-cd-10.10.3.tgz", "argo-cd-10.10.3.tgz.prov"),
+			expectedResult:      gemara.Passed,
+			expectedMsgContains: "a Helm provenance file",
+		},
+		{
 			name:           "checksum manifest alone needs review",
 			payload:        releasePayload("", "app.tar.gz", "checksums.txt"),
 			expectedResult: gemara.NeedsReview,
