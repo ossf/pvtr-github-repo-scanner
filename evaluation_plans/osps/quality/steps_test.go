@@ -429,9 +429,27 @@ func grow(t *testing.T, slicePtr any) {
 	v.Set(reflect.Append(v, reflect.New(v.Type().Elem()).Elem()))
 }
 
+// checkRun is one check run reported on the last merged pull request. An
+// empty conclusion means the run had not finished when the data was fetched.
+type checkRun struct {
+	name       string
+	conclusion string
+}
+
 // graphqlWithStatusChecks builds the payload shape the step reads: one
-// associated pull request whose rollup reports the named check runs.
+// associated pull request whose rollup reports the named, successful check runs.
 func graphqlWithStatusChecks(t *testing.T, names ...string) *data.GraphqlRepoData {
+	t.Helper()
+	runs := make([]checkRun, 0, len(names))
+	for _, name := range names {
+		runs = append(runs, checkRun{name: name, conclusion: "SUCCESS"})
+	}
+	return graphqlWithCheckRuns(t, runs...)
+}
+
+// graphqlWithCheckRuns builds the same payload shape as graphqlWithStatusChecks
+// but sets each run's conclusion.
+func graphqlWithCheckRuns(t *testing.T, runs ...checkRun) *data.GraphqlRepoData {
 	t.Helper()
 	graphql := &data.GraphqlRepoData{}
 
@@ -441,11 +459,90 @@ func graphqlWithStatusChecks(t *testing.T, names ...string) *data.GraphqlRepoDat
 	grow(t, suiteNodes)
 	runNodes := &(*suiteNodes)[0].CheckRuns.Nodes
 
-	for i, name := range names {
+	for i, run := range runs {
 		grow(t, runNodes)
-		(*runNodes)[i].Name = name
+		(*runNodes)[i].Name = run.name
+		(*runNodes)[i].Conclusion = run.conclusion
 	}
 	return graphql
+}
+
+// conclusionCases covers how each check-run conclusion affects whether the
+// run must be a required check. Only "lint" is ever unrequired.
+var conclusionCases = []struct {
+	name        string
+	runs        []checkRun
+	wantFailed  bool
+	wantMissing string
+}{
+	{
+		name:       "a skipped run that is not required is ignored",
+		runs:       []checkRun{{name: "build", conclusion: "SUCCESS"}, {name: "lint", conclusion: "SKIPPED"}},
+		wantFailed: false,
+	},
+	{
+		name:       "a neutral run that is not required is ignored",
+		runs:       []checkRun{{name: "build", conclusion: "SUCCESS"}, {name: "lint", conclusion: "NEUTRAL"}},
+		wantFailed: false,
+	},
+	{
+		name:        "a cancelled run that is not required still counts",
+		runs:        []checkRun{{name: "build", conclusion: "SUCCESS"}, {name: "lint", conclusion: "CANCELLED"}},
+		wantFailed:  true,
+		wantMissing: "lint",
+	},
+	{
+		name:        "an unfinished run that is not required still counts",
+		runs:        []checkRun{{name: "build", conclusion: "SUCCESS"}, {name: "lint"}},
+		wantFailed:  true,
+		wantMissing: "lint",
+	},
+	{
+		name:        "a successful run that is not required still fails",
+		runs:        []checkRun{{name: "build", conclusion: "SUCCESS"}, {name: "lint", conclusion: "SUCCESS"}},
+		wantFailed:  true,
+		wantMissing: "lint",
+	},
+}
+
+func Test_StatusChecksAreRequiredByRulesets_Conclusions(t *testing.T) {
+	for _, tt := range conclusionCases {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := data.Payload{
+				GraphqlRepoData:    graphqlWithCheckRuns(t, tt.runs...),
+				RepositoryMetadata: &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build"}},
+			}
+			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			assertConclusionResult(t, result, message, tt.wantFailed, tt.wantMissing)
+		})
+	}
+}
+
+func Test_StatusChecksAreRequiredByBranchProtection_Conclusions(t *testing.T) {
+	for _, tt := range conclusionCases {
+		t.Run(tt.name, func(t *testing.T) {
+			graphql := graphqlWithCheckRuns(t, tt.runs...)
+			graphql.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = []string{"build"}
+			result, message, _ := StatusChecksAreRequiredByBranchProtection(data.Payload{GraphqlRepoData: graphql})
+			assertConclusionResult(t, result, message, tt.wantFailed, tt.wantMissing)
+		})
+	}
+}
+
+func assertConclusionResult(t *testing.T, result gemara.Result, message string, wantFailed bool, wantMissing string) {
+	t.Helper()
+	if !wantFailed {
+		if result != gemara.Passed {
+			t.Errorf("result: got = %v, want = %v (message %q)", result, gemara.Passed, message)
+		}
+		return
+	}
+	if result != gemara.Failed {
+		t.Errorf("result: got = %v, want = %v (message %q)", result, gemara.Failed, message)
+	}
+	if want := "not mandatory but all should be: " + wantMissing; !strings.Contains(message, want) {
+		t.Errorf("message: got = %q, want it to contain %q", message, want)
+	}
 }
 
 func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {

@@ -203,16 +203,30 @@ func normalizeRepoURL(raw string) string {
 	return url
 }
 
-func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// get the name of all status checks that were run
+// executedStatusChecks returns the names of the check runs on the default
+// branch's last merged pull request that must be required status checks.
+// Runs that concluded SKIPPED or NEUTRAL are left out: a job whose `if:` kept it
+// from running on pull requests, such as a push-only release job, did no
+// checking that a ruleset could require. Unfinished runs have no conclusion
+// yet and are kept.
+func executedStatusChecks(payload data.Payload) []string {
 	var statusChecks []string
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
 			for _, checkRun := range run.CheckRuns.Nodes {
+				switch checkRun.Conclusion {
+				case "SKIPPED", "NEUTRAL":
+					continue
+				}
 				statusChecks = append(statusChecks, checkRun.Name)
 			}
 		}
 	}
+	return statusChecks
+}
+
+func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	statusChecks := executedStatusChecks(payload)
 
 	// Branch rulesets are fetched once during payload load.
 	if !payload.RepositoryMetadata.HasBranchRules() {
@@ -245,15 +259,7 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 }
 
 func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// get the name of all status checks that were run
-	var statusChecks []string
-	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
-		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
-			for _, checkRun := range run.CheckRuns.Nodes {
-				statusChecks = append(statusChecks, checkRun.Name)
-			}
-		}
-	}
+	statusChecks := executedStatusChecks(payload)
 
 	requiredChecks := payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts
 

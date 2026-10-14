@@ -57,6 +57,8 @@ type GraphqlRepoData struct {
 											CheckRuns struct {
 												Nodes []struct {
 													Name string `graphql:"name"`
+													// Conclusion is empty until the run completes.
+													Conclusion string `graphql:"conclusion"`
 												}
 											} `graphql:"checkRuns(first: 25)"`
 										}
