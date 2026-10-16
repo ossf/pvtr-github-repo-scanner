@@ -1,8 +1,11 @@
 package data
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	hclog "github.com/hashicorp/go-hclog"
@@ -11,6 +14,50 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckConnectionPageInfo(t *testing.T) {
+	for _, tt := range []struct {
+		name, metadata string
+		want           *bool
+	}{
+		{"complete", `,"pageInfo":{"hasNextPage":false}`, boolPointer(false)},
+		{"truncated", `,"pageInfo":{"hasNextPage":true}`, boolPointer(true)},
+		{"missing", "", nil},
+		{"null object", `,"pageInfo":null`, nil},
+		{"null flag", `,"pageInfo":{"hasNextPage":null}`, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				assert.Empty(t, r.Header.Get("Authorization"))
+				var request struct{ Query string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				q := strings.ReplaceAll(request.Query, " ", "")
+				assert.Contains(t, q, "checkSuites(first:25){pageInfo{hasNextPage},nodes{")
+				assert.Contains(t, q, "checkRuns(first:25){pageInfo{hasNextPage},nodes{")
+				assert.Contains(t, q, "associatedPullRequests(last:1)")
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"data":{"repository":{"name":"fixture","defaultBranchRef":{"target":{"associatedPullRequests":{"nodes":[{"statusCheckRollup":{"commit":{"checkSuites":{"nodes":[{"checkRuns":{"nodes":[]%s}}]%s}}}}]}}}}}}`, tt.metadata, tt.metadata)
+			}))
+			t.Cleanup(server.Close)
+			client := githubv4.NewEnterpriseClient(server.URL, server.Client())
+			g, partial, err := getGraphqlRepoData(&config.Config{Logger: hclog.NewNullLogger()}, client, "fixture-owner", "fixture")
+			require.NoError(t, err)
+			require.False(t, partial)
+			require.Equal(t, 1, calls)
+			sp := g.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites
+			assert.Equal(t, tt.want, sp.PageInfo.HasNextPage)
+			assert.Equal(t, tt.want, sp.Nodes[0].CheckRuns.PageInfo.HasNextPage)
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 // payloadWithCache builds the minimum Payload the cached accessors require.
 // client is deliberately nil: these tests assert that a populated cache is
