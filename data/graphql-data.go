@@ -50,12 +50,14 @@ type GraphqlRepoData struct {
 
 					AssociatedPullRequests struct {
 						Nodes []struct {
-							StatusCheckRollup struct {
+							StatusCheckRollup *struct {
 								Commit struct {
 									CheckSuites struct {
-										Nodes []struct {
+										PageInfo checkPageInfo
+										Nodes    []struct {
 											CheckRuns struct {
-												Nodes []struct {
+												PageInfo checkPageInfo
+												Nodes    []struct {
 													Name string `graphql:"name"`
 													// Conclusion is empty until the run completes.
 													Conclusion string `graphql:"conclusion"`
@@ -105,6 +107,11 @@ type GraphqlRepoData struct {
 			TotalCount int
 		}
 	} `graphql:"repository(owner: $owner, name: $name)"`
+}
+
+// checkPageInfo distinguishes an exhausted page from unavailable metadata.
+type checkPageInfo struct {
+	HasNextPage *bool
 }
 
 // ReleaseAssetNode is one asset of the GraphQL latest release.

@@ -212,6 +212,9 @@ func normalizeRepoURL(raw string) string {
 func executedStatusChecks(payload data.Payload) []string {
 	var statusChecks []string
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		if check.StatusCheckRollup == nil {
+			continue
+		}
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
 			for _, checkRun := range run.CheckRuns.Nodes {
 				switch checkRun.Conclusion {
@@ -225,7 +228,39 @@ func executedStatusChecks(payload data.Payload) []string {
 	return statusChecks
 }
 
+// checkEvidenceDiagnostic reports incomplete connections in the selected PR
+// sample. A full page is not necessarily truncated; only explicit false proves
+// that an observed connection has no additional page.
+func checkEvidenceDiagnostic(payload data.Payload) string {
+	for pi, pr := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		// Preserve legacy null-parent behavior; null does not prove no checks exist.
+		if pr.StatusCheckRollup == nil {
+			continue
+		}
+		suites := pr.StatusCheckRollup.Commit.CheckSuites
+		if suites.PageInfo.HasNextPage == nil {
+			return fmt.Sprintf("check-suite completeness unavailable for pull-request sample %d (%d returned suites); manual review required", pi+1, len(suites.Nodes))
+		}
+		if *suites.PageInfo.HasNextPage {
+			return fmt.Sprintf("check suites truncated for pull-request sample %d (%d returned suites, hasNextPage=true); manual review required", pi+1, len(suites.Nodes))
+		}
+		for si, suite := range suites.Nodes {
+			runs := suite.CheckRuns
+			if runs.PageInfo.HasNextPage == nil {
+				return fmt.Sprintf("check-run completeness unavailable for pull-request sample %d, suite %d (%d returned runs); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+			if *runs.PageInfo.HasNextPage {
+				return fmt.Sprintf("check runs truncated for pull-request sample %d, suite %d (%d returned runs, hasNextPage=true); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+		}
+	}
+	return ""
+}
+
 func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
 	statusChecks := executedStatusChecks(payload)
 
 	// Branch rulesets are fetched once during payload load.
@@ -259,6 +294,9 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 }
 
 func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
 	statusChecks := executedStatusChecks(payload)
 
 	requiredChecks := payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts
@@ -379,9 +417,15 @@ func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, mess
 }
 
 func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
 	// get the name of all status checks that were run
 	var statusChecks []string
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		if check.StatusCheckRollup == nil {
+			continue
+		}
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
 			for _, checkRun := range run.CheckRuns.Nodes {
 				statusChecks = append(statusChecks, checkRun.Name)

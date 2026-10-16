@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -12,10 +13,197 @@ import (
 	"github.com/gemaraproj/go-gemara"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
 	"github.com/ossf/si-tooling/v2/si"
 	sdkai "github.com/privateerproj/privateer-sdk/ai"
 	sdkconfig "github.com/privateerproj/privateer-sdk/config"
 )
+
+// setCheckPageInfo uses JSON so fixtures can distinguish omitted metadata,
+// a null object, a null flag, and an explicitly exhausted connection.
+func setCheckPageInfo(t *testing.T, connection any, pageInfo string) {
+	t.Helper()
+	if pageInfo == "" {
+		return
+	}
+	if err := json.Unmarshal([]byte(`{"PageInfo":`+pageInfo+`}`), connection); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkEvidence(t *testing.T, counts []int, outer, inner string, optional bool) data.Payload {
+	t.Helper()
+	g := &data.GraphqlRepoData{}
+	prs := &g.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes
+	grow(t, prs)
+	if err := json.Unmarshal([]byte(`{"StatusCheckRollup":{}}`), &(*prs)[0]); err != nil {
+		t.Fatal(err)
+	}
+	suites := &(*prs)[0].StatusCheckRollup.Commit.CheckSuites
+	setCheckPageInfo(t, suites, outer)
+	var required []string
+	for si, count := range counts {
+		grow(t, &suites.Nodes)
+		runs := &suites.Nodes[si].CheckRuns
+		setCheckPageInfo(t, runs, inner)
+		for ri := 0; ri < count; ri++ {
+			grow(t, &runs.Nodes)
+			name := fmt.Sprintf("build-%d-%d", si, ri)
+			runs.Nodes[ri].Name = name
+			runs.Nodes[ri].Conclusion = "SUCCESS"
+			if !optional || si != len(counts)-1 || ri != count-1 {
+				required = append(required, name)
+			}
+		}
+	}
+	g.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = required
+	return data.Payload{GraphqlRepoData: g, RepositoryMetadata: &fakeRulesetMetadata{hasRules: true, requiredChecks: required}, IsCodeRepo: true}
+}
+
+func TestCheckEvidenceCompleteness(t *testing.T) {
+	const complete = `{"hasNextPage":false}`
+	const truncated = `{"hasNextPage":true}`
+	ones := make([]int, 25)
+	for i := range ones {
+		ones[i] = 1
+	}
+	tests := []struct {
+		name           string
+		counts         []int
+		outer, inner   string
+		optional       bool
+		want03, want06 gemara.Result
+		message        string
+	}{
+		{"hidden run after 25", []int{25}, complete, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned runs"},
+		{"hidden suite after 25", ones, truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned suites"},
+		{"25 empty suites hide a run", make([]int, 25), truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned suites"},
+		{"exactly 25 complete runs", []int{25}, complete, complete, false, gemara.Passed, gemara.Passed, ""},
+		{"exactly 25 complete suites", ones, complete, complete, false, gemara.Passed, gemara.Passed, ""},
+		{"exactly 25 empty suites", make([]int, 25), complete, complete, false, gemara.Passed, gemara.Failed, ""},
+		{"short truncated run page", []int{1}, complete, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "1 returned runs"},
+		{"short truncated suite page", []int{1}, truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "1 returned suites"},
+		{"both connections truncated", []int{1}, truncated, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "check suites"},
+		{"observed violation on incomplete page", []int{25}, complete, truncated, true, gemara.NeedsReview, gemara.NeedsReview, "check runs"},
+		{"complete violation", []int{1}, complete, complete, true, gemara.Failed, gemara.Passed, ""},
+		{"complete empty connections", []int{0}, complete, complete, false, gemara.Passed, gemara.Failed, ""},
+		{"missing suite metadata", []int{1}, "", complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
+		{"null suite metadata", []int{1}, "null", complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
+		{"null suite flag", []int{1}, `{"hasNextPage":null}`, complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
+		{"missing run metadata", []int{1}, complete, "", false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
+		{"null run metadata", []int{1}, complete, "null", false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
+		{"null run flag", []int{1}, complete, `{"hasNextPage":null}`, false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := checkEvidence(t, tt.counts, tt.outer, tt.inner, tt.optional)
+			for _, step := range []struct {
+				name string
+				fn   func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel)
+				want gemara.Result
+			}{{"rulesets", StatusChecksAreRequiredByRulesets, tt.want03}, {"branch protection", StatusChecksAreRequiredByBranchProtection, tt.want03}, {"presence", HasOneOrMoreStatusChecks, tt.want06}} {
+				t.Run(step.name, func(t *testing.T) {
+					result, message, confidence := step.fn(p)
+					if result != step.want {
+						t.Errorf("got %s, want %s: %s", result, step.want, message)
+					}
+					if tt.message != "" && (!strings.Contains(message, tt.message) || confidence != gemara.Low) {
+						t.Errorf("diagnostic=%q confidence=%v", message, confidence)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCheckEvidenceHiddenCounterexamples(t *testing.T) {
+	const complete = `{"hasNextPage":false}`
+	ones := make([]int, 26)
+	for i := range ones {
+		ones[i] = 1
+	}
+	emptyThenRun := make([]int, 26)
+	emptyThenRun[25] = 1
+	for _, tt := range []struct {
+		name           string
+		counts         []int
+		optional       bool
+		full03, full06 gemara.Result
+	}{
+		{"26 runs", []int{26}, true, gemara.Failed, gemara.Passed},
+		{"26 suites", ones, true, gemara.Failed, gemara.Passed},
+		{"hidden only run", emptyThenRun, false, gemara.Passed, gemara.Passed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := checkEvidence(t, tt.counts, complete, complete, tt.optional)
+			r03, _, _ := StatusChecksAreRequiredByRulesets(p)
+			r06, _, _ := HasOneOrMoreStatusChecks(p)
+			if r03 != tt.full03 || r06 != tt.full06 {
+				t.Fatalf("full inventory: QA03=%s QA06=%s", r03, r06)
+			}
+			sp := &p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites
+			if len(sp.Nodes) > 25 {
+				sp.Nodes = sp.Nodes[:25]
+				setCheckPageInfo(t, sp, `{"hasNextPage":true}`)
+			} else {
+				rp := &sp.Nodes[0].CheckRuns
+				rp.Nodes = rp.Nodes[:25]
+				setCheckPageInfo(t, rp, `{"hasNextPage":true}`)
+			}
+			for _, steps := range [][]func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){
+				{StatusChecksAreRequiredByRulesets, StatusChecksAreRequiredByBranchProtection},
+				{reusable_steps.IsCodeRepo, HasOneOrMoreStatusChecks},
+			} {
+				var adapted []gemara.AssessmentStep
+				for _, step := range steps {
+					adapted = append(adapted, func(v any) (gemara.Result, string, gemara.ConfidenceLevel) { return step(v.(data.Payload)) })
+				}
+				a, err := gemara.NewAssessment("synthetic-quality", "Check completeness", []string{"maturity-3"}, adapted)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := a.Run(p); got != gemara.NeedsReview {
+					t.Errorf("truncated assessment=%s, want NeedsReview: %s", got, a.Message)
+				}
+				if a.StepsExecuted != 2 {
+					t.Errorf("executed %d steps, want 2", a.StepsExecuted)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckEvidenceLaterSuiteAndApplicability(t *testing.T) {
+	p := checkEvidence(t, []int{1, 1}, `{"hasNextPage":false}`, `{"hasNextPage":false}`, true)
+	runs := &p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites.Nodes[1].CheckRuns
+	setCheckPageInfo(t, runs, `{"hasNextPage":true}`)
+	var steps []gemara.AssessmentStep
+	for _, fn := range []func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){StatusChecksAreRequiredByRulesets, StatusChecksAreRequiredByBranchProtection} {
+		steps = append(steps, func(v any) (gemara.Result, string, gemara.ConfidenceLevel) { return fn(v.(data.Payload)) })
+	}
+	a, err := gemara.NewAssessment("QA03", "Completeness", []string{"maturity-3"}, steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Run(p) != gemara.NeedsReview || !strings.Contains(a.Message, "suite 2") || a.StepsExecuted != 2 {
+		t.Fatalf("assessment=%s message=%q steps=%d", a.Result, a.Message, a.StepsExecuted)
+	}
+	p.IsCodeRepo = false
+	a, err = gemara.NewAssessment("QA06", "Applicability", []string{"maturity-3"}, []gemara.AssessmentStep{
+		func(v any) (gemara.Result, string, gemara.ConfidenceLevel) {
+			return reusable_steps.IsCodeRepo(v.(data.Payload))
+		},
+		func(v any) (gemara.Result, string, gemara.ConfidenceLevel) {
+			return HasOneOrMoreStatusChecks(v.(data.Payload))
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Run(p) != gemara.NotApplicable || a.StepsExecuted != 1 {
+		t.Fatalf("non-code result=%s steps=%d", a.Result, a.StepsExecuted)
+	}
+}
 
 func Test_InsightsListsRepositories(t *testing.T) {
 	tests := []struct {
@@ -455,8 +643,13 @@ func graphqlWithCheckRuns(t *testing.T, runs ...checkRun) *data.GraphqlRepoData 
 
 	prNodes := &graphql.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes
 	grow(t, prNodes)
+	if err := json.Unmarshal([]byte(`{"StatusCheckRollup":{}}`), &(*prNodes)[0]); err != nil {
+		t.Fatal(err)
+	}
 	suiteNodes := &(*prNodes)[0].StatusCheckRollup.Commit.CheckSuites.Nodes
+	setCheckPageInfo(t, &(*prNodes)[0].StatusCheckRollup.Commit.CheckSuites, `{"hasNextPage":false}`)
 	grow(t, suiteNodes)
+	setCheckPageInfo(t, &(*suiteNodes)[0].CheckRuns, `{"hasNextPage":false}`)
 	runNodes := &(*suiteNodes)[0].CheckRuns.Nodes
 
 	for i, run := range runs {
