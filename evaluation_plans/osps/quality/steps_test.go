@@ -595,6 +595,62 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 	}
 }
 
+func Test_HasOneOrMoreStatusChecks(t *testing.T) {
+	tests := []struct {
+		name       string
+		runs       []checkRun
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "no check runs on the pull request",
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name:       "every run was skipped",
+			runs:       []checkRun{{name: "build", conclusion: "SKIPPED"}, {name: "lint", conclusion: "SKIPPED"}},
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name:       "every run was skipped or neutral",
+			runs:       []checkRun{{name: "build", conclusion: "SKIPPED"}, {name: "lint", conclusion: "NEUTRAL"}},
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name: "skipped and neutral runs alongside a successful run",
+			runs: []checkRun{
+				{name: "build", conclusion: "SUCCESS"},
+				{name: "lint", conclusion: "SKIPPED"},
+				{name: "docs", conclusion: "NEUTRAL"},
+			},
+			wantResult: gemara.Passed,
+			wantMsg:    "1 status checks were run",
+		},
+		{
+			name:       "failed and unfinished runs still count",
+			runs:       []checkRun{{name: "build", conclusion: "FAILURE"}, {name: "lint"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "2 status checks were run",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := data.Payload{GraphqlRepoData: graphqlWithCheckRuns(t, tt.runs...)}
+			result, message, _ := HasOneOrMoreStatusChecks(payload)
+			if result != tt.wantResult {
+				t.Errorf("result = %v, want %v", result, tt.wantResult)
+			}
+			if message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", message, tt.wantMsg)
+			}
+		})
+	}
+}
+
 type treeEntry struct {
 	name     string
 	treeType string

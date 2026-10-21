@@ -331,14 +331,7 @@ func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, mess
 
 func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	// get the name of all status checks that were run
-	var statusChecks []string
-	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
-		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
-			for _, checkRun := range run.CheckRuns.Nodes {
-				statusChecks = append(statusChecks, checkRun.Name)
-			}
-		}
-	}
+	statusChecks := executedStatusChecks(payload)
 
 	if len(statusChecks) > 0 {
 		return gemara.Passed, fmt.Sprintf("%d status checks were run", len(statusChecks)), confidence
