@@ -72,7 +72,7 @@ jobs:
     needs: [integration]
 ` + ifLine + `    runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - run: test "${{ contains(needs.*.result, 'failure') }}" = "false"
 `
 }
 
@@ -245,7 +245,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - run: test "${{ contains(needs.*.result, 'failure') }}" = "false"
 `
 	payload := gatePayload(t,
 		[]gateRun{{"call / inner", gateWorkflowPath}, {"gate", gateWorkflowPath}},
@@ -254,5 +254,56 @@ jobs:
 	result, message, _ := StatusChecksAreRequiredByRulesets(payload)
 	if result != gemara.Passed {
 		t.Errorf("result = %v, want Passed (message %q)", result, message)
+	}
+}
+
+func Test_GateJob_MustFailOnNeeds(t *testing.T) {
+	const header = `on: pull_request
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lint
+  gate:
+    needs: [lint]
+    if: always()
+`
+	tests := []struct {
+		name string
+		gate string
+		want gemara.Result
+	}{
+		{
+			name: "a gate that only echoes cannot fail",
+			gate: "    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n",
+			want: gemara.Failed,
+		},
+		{
+			name: "a gate that ignores errors cannot fail",
+			gate: "    continue-on-error: true\n    runs-on: ubuntu-latest\n    steps:\n      - run: exit ${{ contains(needs.*.result, 'failure') && 1 || 0 }}\n",
+			want: gemara.Failed,
+		},
+		{
+			name: "a gate whose step condition reads needs counts",
+			gate: "    runs-on: ubuntu-latest\n    steps:\n      - if: contains(needs.*.result, 'failure')\n        run: exit 1\n",
+			want: gemara.Passed,
+		},
+		{
+			name: "a gate that passes needs to an action counts",
+			gate: "    runs-on: ubuntu-latest\n    steps:\n      - uses: re-actors/alls-green@release/v1\n        with:\n          jobs: ${{ toJSON(needs) }}\n",
+			want: gemara.Passed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := gatePayload(t,
+				[]gateRun{{"lint", gateWorkflowPath}, {"gate", gateWorkflowPath}},
+				[]string{"gate"},
+				workflowFile(gateWorkflowPath, header+tt.gate))
+			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			if result != tt.want {
+				t.Errorf("result = %v, want %v (message %q)", result, tt.want, message)
+			}
+		})
 	}
 }

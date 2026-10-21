@@ -23,19 +23,42 @@ type checkCoverage struct {
 	gates     []string
 }
 
+// executedStatusChecks returns the check runs on the default branch's last
+// merged pull request that must be required status checks.
+// Runs that concluded SKIPPED or NEUTRAL are left out: a job whose `if:` kept it
+// from running on pull requests, such as a push-only release job, did no
+// checking that a ruleset could require. Unfinished runs have no conclusion
+// yet and are kept.
+func executedStatusChecks(payload data.Payload) []executedCheck {
+	var statusChecks []executedCheck
+	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
+			for _, checkRun := range run.CheckRuns.Nodes {
+				switch checkRun.Conclusion {
+				case "SKIPPED", "NEUTRAL":
+					continue
+				}
+				statusChecks = append(statusChecks, executedCheck{name: checkRun.Name, workflow: run.WorkflowRun.File.Path})
+			}
+		}
+	}
+	return statusChecks
+}
+
 // uncoveredChecks reports which executed checks the required contexts do not
 // cover. A check counts as covered when its name is required, or when its
 // workflow has a required gate job that needs it, directly or transitively,
 // and still runs when a dependency fails. GitHub treats a skipped required
 // check as passing, so a gate without such a condition proves nothing.
-func uncoveredChecks(payload data.Payload, executed []executedCheck, required []string) checkCoverage {
+// A gate must also be able to fail on its dependencies, see failsOnNeeds.
+func uncoveredChecks(payload data.Payload, required []string) checkCoverage {
 	requiredSet := make(map[string]bool, len(required))
 	for _, name := range required {
 		requiredSet[name] = true
 	}
 
 	var unmatched []executedCheck
-	for _, check := range executed {
+	for _, check := range executedStatusChecks(payload) {
 		if !requiredSet[check.name] {
 			unmatched = append(unmatched, check)
 		}
@@ -169,14 +192,15 @@ func isMatrixJob(job *actionlint.Job) bool {
 	return job.Strategy != nil && job.Strategy.Matrix != nil
 }
 
-// isQualifyingGate reports whether the job runs even when a dependency fails.
-// Only a plain, non-matrix job with an exact condition qualifies, because the
-// required context must match its single check name.
+// isQualifyingGate reports whether the job runs even when a dependency fails
+// and can then fail itself. Only a plain, non-matrix job with an exact
+// condition qualifies, because the required context must match its single
+// check name.
 func isQualifyingGate(job *actionlint.Job) bool {
 	if job.WorkflowCall != nil || isMatrixJob(job) || job.If == nil {
 		return false
 	}
-	if strings.Contains(jobCheckName(job), "${{") {
+	if strings.Contains(jobCheckName(job), "${{") || !failsOnNeeds(job) {
 		return false
 	}
 	condition := strings.TrimSpace(job.If.Value)
@@ -208,4 +232,36 @@ func jobProducesCheck(job *actionlint.Job, checkName string) bool {
 		return checkName == name || strings.HasPrefix(checkName, name+" (")
 	}
 	return checkName == name
+}
+
+// failsOnNeeds reports whether the job can go red because of its dependencies:
+// it must not ignore errors, and a step must read the `needs` context. A step
+// that reads `needs` only in its condition still passes the check, so this is
+// a heuristic that rejects the clear cases such as a gate that only echoes.
+func failsOnNeeds(job *actionlint.Job) bool {
+	if job.ContinueOnError != nil && (job.ContinueOnError.Expression != nil || job.ContinueOnError.Value) {
+		return false
+	}
+	reads := func(s *actionlint.String) bool { return s != nil && strings.Contains(s.Value, "needs") }
+	for _, step := range job.Steps {
+		if step == nil {
+			continue
+		}
+		if reads(step.If) {
+			return true
+		}
+		switch exec := step.Exec.(type) {
+		case *actionlint.ExecRun:
+			if reads(exec.Run) {
+				return true
+			}
+		case *actionlint.ExecAction:
+			for _, input := range exec.Inputs {
+				if input != nil && reads(input.Value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
