@@ -203,10 +203,42 @@ func normalizeRepoURL(raw string) string {
 	return url
 }
 
+// checkEvidenceDiagnostic reports incomplete connections in the selected PR
+// sample. A full page is not necessarily truncated; only explicit false proves
+// that an observed connection has no additional page.
+func checkEvidenceDiagnostic(payload data.Payload) string {
+	for pi, pr := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		// Preserve legacy null-parent behavior; null does not prove no checks exist.
+		if pr.StatusCheckRollup == nil {
+			continue
+		}
+		suites := pr.StatusCheckRollup.Commit.CheckSuites
+		if suites.PageInfo.HasNextPage == nil {
+			return fmt.Sprintf("check-suite completeness unavailable for pull-request sample %d (%d returned suites); manual review required", pi+1, len(suites.Nodes))
+		}
+		if *suites.PageInfo.HasNextPage {
+			return fmt.Sprintf("check suites truncated for pull-request sample %d (%d returned suites, hasNextPage=true); manual review required", pi+1, len(suites.Nodes))
+		}
+		for si, suite := range suites.Nodes {
+			runs := suite.CheckRuns
+			if runs.PageInfo.HasNextPage == nil {
+				return fmt.Sprintf("check-run completeness unavailable for pull-request sample %d, suite %d (%d returned runs); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+			if *runs.PageInfo.HasNextPage {
+				return fmt.Sprintf("check runs truncated for pull-request sample %d, suite %d (%d returned runs, hasNextPage=true); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+		}
+	}
+	return ""
+}
+
 // requiredChecksResult turns a coverage comparison into a control result.
 // passMessage is the message when every check is covered without a gate.
 func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	var confidence gemara.ConfidenceLevel
+	if coverage.incompleteEvidence != "" {
+		return gemara.NeedsReview, coverage.incompleteEvidence, gemara.Low
+	}
 	if len(coverage.missing) > 0 {
 		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s%s", strings.Join(coverage.missing, ", "), failSuffix), confidence
 	}
@@ -220,6 +252,10 @@ func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string
 }
 
 func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
+
 	// Branch rulesets are fetched once during payload load.
 	if !payload.RepositoryMetadata.HasBranchRules() {
 		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
@@ -232,6 +268,10 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 }
 
 func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
+
 	coverage := uncoveredChecks(payload, payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts)
 	return requiredChecksResult(coverage, "No status checks were run that are not required by branch protection", "")
 }
@@ -330,9 +370,16 @@ func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, mess
 }
 
 func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
+	}
+
 	// get the name of all status checks that were run
 	var statusChecks []string
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		if check.StatusCheckRollup == nil {
+			continue
+		}
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
 			for _, checkRun := range run.CheckRuns.Nodes {
 				statusChecks = append(statusChecks, checkRun.Name)

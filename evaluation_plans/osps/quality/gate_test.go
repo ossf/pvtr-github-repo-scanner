@@ -1,6 +1,8 @@
 package quality
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,10 +25,15 @@ func graphqlWithWorkflowRuns(t *testing.T, runs ...gateRun) *data.GraphqlRepoDat
 	graphql := &data.GraphqlRepoData{}
 	prNodes := &graphql.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes
 	grow(t, prNodes)
+	if err := json.Unmarshal([]byte(`{"StatusCheckRollup":{}}`), &(*prNodes)[0]); err != nil {
+		t.Fatal(err)
+	}
+	setCheckPageInfo(t, &(*prNodes)[0].StatusCheckRollup.Commit.CheckSuites, `{"hasNextPage":false}`)
 	suiteNodes := &(*prNodes)[0].StatusCheckRollup.Commit.CheckSuites.Nodes
 	for i, run := range runs {
 		grow(t, suiteNodes)
 		suite := &(*suiteNodes)[i]
+		setCheckPageInfo(t, &suite.CheckRuns, `{"hasNextPage":false}`)
 		suite.WorkflowRun.File.Path = run.workflow
 		grow(t, &suite.CheckRuns.Nodes)
 		suite.CheckRuns.Nodes[0].Name = run.name
@@ -305,5 +312,102 @@ jobs:
 				t.Errorf("result = %v, want %v (message %q)", result, tt.want, message)
 			}
 		})
+	}
+}
+
+// Complete gate coverage is not evidence that the observed inventory is complete.
+// Exercise the coverage helper directly as well as both registered QA-03.01 paths.
+func TestGateCheckEvidenceCompleteness(t *testing.T) {
+	const complete = `{"hasNextPage":false}`
+	const truncated = `{"hasNextPage":true}`
+	for _, tc := range []struct {
+		name, pageInfo string
+		oneSuite       bool
+		incomplete     bool
+		visibleMiss    bool
+		noRules        bool
+	}{
+		{"25 complete suites", complete, false, false, false, false},
+		{"25 complete runs", complete, true, false, false, false},
+		{"truncated suites with gate", truncated, false, true, false, false},
+		{"truncated runs with gate", truncated, true, true, false, false},
+		{"missing suite metadata with gate", "", false, true, false, false},
+		{"null suite metadata with gate", "null", false, true, false, false},
+		{"missing run metadata with gate", "", true, true, false, false},
+		{"null run metadata with gate", "null", true, true, false, false},
+		{"incomplete evidence with visible miss", truncated, true, true, true, false},
+		{"incomplete evidence without rulesets", truncated, true, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := []gateRun{{"lint", gateWorkflowPath}, {"unit", gateWorkflowPath}, {"gate", gateWorkflowPath}}
+			for i := 0; len(runs) < 25; i++ {
+				runs = append(runs, gateRun{fmt.Sprintf("Integration Tests (%d)", i), gateWorkflowPath})
+			}
+			if tc.visibleMiss {
+				runs[0] = gateRun{"docs", gateWorkflowPath}
+			}
+			p := gatePayload(t, runs, []string{"gate"}, workflowFile(gateWorkflowPath, gateWorkflow("always()")))
+			p.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = []string{"gate"}
+			if tc.noRules {
+				p.RepositoryMetadata = &fakeRulesetMetadata{hasRules: false}
+			}
+			suites := &p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites
+			if tc.oneSuite {
+				allRuns := suites.Nodes[0].CheckRuns.Nodes[:0]
+				for _, suite := range suites.Nodes {
+					allRuns = append(allRuns, suite.CheckRuns.Nodes...)
+				}
+				suites.Nodes = suites.Nodes[:1]
+				suites.Nodes[0].CheckRuns.Nodes = allRuns
+				suites.Nodes[0].CheckRuns.PageInfo.HasNextPage = nil
+				setCheckPageInfo(t, &suites.Nodes[0].CheckRuns, tc.pageInfo)
+			} else {
+				suites.PageInfo.HasNextPage = nil
+				setCheckPageInfo(t, suites, tc.pageInfo)
+			}
+			want := gemara.Passed
+			if tc.incomplete {
+				want = gemara.NeedsReview
+			}
+			check := func(result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+				t.Helper()
+				if result != want {
+					t.Errorf("got %s (%s); want %s", result, message, want)
+				}
+				if tc.incomplete && (confidence != gemara.Low || !strings.Contains(message, "manual review required")) {
+					t.Errorf("incomplete evidence needs a concrete review diagnostic: %s/%s %q", result, confidence, message)
+				}
+			}
+			coverage := uncoveredChecks(p, []string{"gate"})
+			check(requiredChecksResult(coverage, "complete evidence covered by gate", ""))
+			check(StatusChecksAreRequiredByRulesets(p))
+			check(StatusChecksAreRequiredByBranchProtection(p))
+			if !tc.incomplete && !tc.noRules {
+				if len(coverage.gates) != 1 || coverage.gates[0] != "gate" {
+					t.Fatalf("complete evidence lost gate coverage: %+v", coverage)
+				}
+				checks := executedStatusChecks(p)
+				if len(checks) != 25 || checks[0].workflow != gateWorkflowPath {
+					t.Fatalf("lost check inventory or workflow metadata: %+v", checks)
+				}
+			}
+		})
+	}
+}
+
+func TestGateNullRollupCompatibility(t *testing.T) {
+	p := gatePayload(t, nil, nil)
+	p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup = nil
+	if checks := executedStatusChecks(p); len(checks) != 0 {
+		t.Fatalf("legacy null rollup returned checks: %+v", checks)
+	}
+	for _, step := range []func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){StatusChecksAreRequiredByRulesets, StatusChecksAreRequiredByBranchProtection} {
+		result, message, confidence := step(p)
+		if result != gemara.Passed || confidence != gemara.Undetermined {
+			t.Errorf("null-parent compatibility changed: %s/%s %q", result, confidence, message)
+		}
+	}
+	if result, message, confidence := HasOneOrMoreStatusChecks(p); result != gemara.Failed || confidence != gemara.Undetermined {
+		t.Errorf("QA-06.01 null-parent compatibility changed: %s/%s %q", result, confidence, message)
 	}
 }
