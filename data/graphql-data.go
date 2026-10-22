@@ -55,6 +55,13 @@ type GraphqlRepoData struct {
 									CheckSuites struct {
 										PageInfo checkPageInfo
 										Nodes    []struct {
+											// WorkflowRun is empty for suites that GitHub Actions
+											// did not create, such as external apps.
+											WorkflowRun struct {
+												File struct {
+													Path string `graphql:"path"`
+												} `graphql:"file"`
+											} `graphql:"workflowRun"`
 											CheckRuns struct {
 												PageInfo checkPageInfo
 												Nodes    []struct {

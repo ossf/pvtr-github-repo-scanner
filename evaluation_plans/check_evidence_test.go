@@ -28,17 +28,21 @@ func (f checkTransport) RoundTrip(r *http.Request) (*http.Response, error) { ret
 // checks are absent. Present connections must still establish completeness.
 func TestCheckEvidenceClientCompatibility(t *testing.T) {
 	for _, tc := range []struct {
-		name, page         string
-		suites, runs       int
-		nullRollup, review bool
+		name, page, runPage string
+		suites, runs        int
+		nullRollup, review  bool
 	}{
-		{"null rollup", "", 0, 0, true, false},
-		{"empty complete", `,"pageInfo":{"hasNextPage":false}`, 0, 0, false, false},
-		{"missing page info", "", 0, 0, false, true},
-		{"null page info", `,"pageInfo":null`, 0, 0, false, true},
-		{"truncated", `,"pageInfo":{"hasNextPage":true}`, 25, 0, false, true},
-		{"25 exhausted suites", `,"pageInfo":{"hasNextPage":false}`, 25, 1, false, false},
-		{"25 exhausted runs", `,"pageInfo":{"hasNextPage":false}`, 1, 25, false, false},
+		{"null rollup", "", "", 0, 0, true, false},
+		{"empty complete", `,"pageInfo":{"hasNextPage":false}`, "", 0, 0, false, false},
+		{"missing page info", "", "", 0, 0, false, true},
+		{"null page info", `,"pageInfo":null`, "", 0, 0, false, true},
+		{"truncated", `,"pageInfo":{"hasNextPage":true}`, "", 25, 0, false, true},
+		{"25 exhausted suites", `,"pageInfo":{"hasNextPage":false}`, `,"pageInfo":{"hasNextPage":false}`, 25, 1, false, false},
+		{"25 exhausted runs", `,"pageInfo":{"hasNextPage":false}`, `,"pageInfo":{"hasNextPage":false}`, 1, 25, false, false},
+		{"missing run page info", `,"pageInfo":{"hasNextPage":false}`, "", 1, 1, false, true},
+		{"null run page info", `,"pageInfo":{"hasNextPage":false}`, `,"pageInfo":null`, 1, 1, false, true},
+		{"null run flag", `,"pageInfo":{"hasNextPage":false}`, `,"pageInfo":{"hasNextPage":null}`, 1, 1, false, true},
+		{"truncated runs", `,"pageInfo":{"hasNextPage":false}`, `,"pageInfo":{"hasNextPage":true}`, 1, 25, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var suites []string
@@ -47,7 +51,7 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 				for j := 0; j < tc.runs; j++ {
 					runs = append(runs, `{"name":"build","conclusion":"SUCCESS"}`)
 				}
-				suites = append(suites, `{"checkRuns":{"nodes":[`+strings.Join(runs, ",")+`],"pageInfo":{"hasNextPage":false}}}`)
+				suites = append(suites, `{"workflowRun":{"file":{"path":".github/workflows/build.yml"}},"checkRuns":{"nodes":[`+strings.Join(runs, ",")+`]`+tc.runPage+`}}`)
 			}
 			rollup := `{"commit":{"checkSuites":{"nodes":[` + strings.Join(suites, ",") + `]` + tc.page + `}}}`
 			if tc.nullRollup {
@@ -64,7 +68,7 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 				if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 					t.Fatal(err)
 				}
-				for _, selection := range []string{"associatedPullRequests(last:1)", "checkSuites(first:25){pageInfo{hasNextPage}", "checkRuns(first:25){pageInfo{hasNextPage}"} {
+				for _, selection := range []string{"associatedPullRequests(last:1)", "checkSuites(first:25){pageInfo{hasNextPage}", "checkRuns(first:25){pageInfo{hasNextPage}", "workflowRun{file{path}}"} {
 					if !strings.Contains(strings.ReplaceAll(input.Query, " ", ""), selection) {
 						t.Fatalf("missing query selection %q", selection)
 					}
@@ -83,6 +87,9 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 			}
 			if (g.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup == nil) != tc.nullRollup {
 				t.Fatal("decoder lost nullable-parent presence")
+			}
+			if tc.suites > 0 && g.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites.Nodes[0].WorkflowRun.File.Path != ".github/workflows/build.yml" {
+				t.Fatal("decoder lost workflow-run metadata")
 			}
 			p := data.Payload{GraphqlRepoData: &g, RepositoryMetadata: &checkMetadata{}, IsCodeRepo: true}
 			for _, control := range []string{"OSPS-QA-03.01", "OSPS-QA-06.01"} {
