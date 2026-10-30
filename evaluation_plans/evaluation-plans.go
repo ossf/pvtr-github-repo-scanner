@@ -79,7 +79,6 @@ var (
 			build_release.SecretsManagementPolicy,
 		},
 		"OSPS-DO-01.01": {
-			reusable_steps.HasSecurityInsightsFile,
 			docs.HasUserGuides,
 		},
 		"OSPS-DO-02.01": {
