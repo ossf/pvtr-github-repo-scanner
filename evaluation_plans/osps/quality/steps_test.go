@@ -1547,33 +1547,6 @@ func TestIsAmbiguousBinaryAsset(t *testing.T) {
 	}
 }
 
-func TestIsSignatureOrChecksumAsset(t *testing.T) {
-	// Callers pass an already-lowercased, trimmed name, so inputs are lowercase.
-	cases := map[string]bool{
-		"app.exe.sig":                true,
-		"app.tar.gz.asc":             true,
-		"app.sha256":                 true,
-		"app.md5":                    true,
-		"checksums.txt":              true,
-		"release.checksum":           true,
-		"sha256sums":                 true,
-		"md5sums":                    true,
-		"terraform_1.9.0_sha256sums": true,
-		"sha512sums":                 true,
-		"b2sums":                     true,
-		"app.exe":                    false,
-		"mytool_linux_amd64":         false,
-		"app.spdx.json":              false,
-		"notes.txt":                  false,
-		"":                           false,
-	}
-	for name, want := range cases {
-		if got := isSignatureOrChecksumAsset(name); got != want {
-			t.Errorf("isSignatureOrChecksumAsset(%q) = %v, want %v", name, got, want)
-		}
-	}
-}
-
 // fakeReviewRulesMetadata stubs the accessors RequiresNonAuthorApproval reads;
 // embedding the interface leaves every other method unimplemented so a step
 // that reaches for one fails loudly.

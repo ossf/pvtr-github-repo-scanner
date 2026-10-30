@@ -568,7 +568,7 @@ func ReleasesHaveSBOM(payload data.Payload) (result gemara.Result, message strin
 				hasSBOM = true
 				continue
 			}
-			if isSignatureOrChecksumAsset(strings.ToLower(strings.TrimSpace(name))) {
+			if reusable_steps.IsSignatureOrChecksumAsset(strings.ToLower(strings.TrimSpace(name))) {
 				continue
 			}
 			if isCompiledReleaseAsset(name) {
@@ -631,7 +631,7 @@ func ReleasesHaveSBOM(payload data.Payload) (result gemara.Result, message strin
 // names (e.g. "random-bomb.txt").
 func isSBOMAsset(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
-	if lower == "" || isSignatureOrChecksumAsset(lower) {
+	if lower == "" || reusable_steps.IsSignatureOrChecksumAsset(lower) {
 		return false
 	}
 
@@ -704,7 +704,7 @@ func isCompiledReleaseAsset(name string) bool {
 	if lower == "" {
 		return false
 	}
-	if isSBOMAsset(lower) || isSignatureOrChecksumAsset(lower) {
+	if isSBOMAsset(lower) || reusable_steps.IsSignatureOrChecksumAsset(lower) {
 		return false
 	}
 	for _, ext := range compiledReleaseAssetExtensions {
@@ -754,7 +754,7 @@ func isAmbiguousBinaryAsset(name string) bool {
 	if lower == "" {
 		return false
 	}
-	if isSBOMAsset(lower) || isSignatureOrChecksumAsset(lower) || isCompiledReleaseAsset(lower) {
+	if isSBOMAsset(lower) || reusable_steps.IsSignatureOrChecksumAsset(lower) || isCompiledReleaseAsset(lower) {
 		return false
 	}
 	for _, ext := range ambiguousArchiveExtensions {
@@ -773,31 +773,6 @@ func isAmbiguousBinaryAsset(name string) bool {
 	// Unknown suffixes remain ambiguous: a dot may be part of a version rather
 	// than a true extension (for example "mytool-v1.2-linux-amd64").
 	return true
-}
-
-// signatureOrChecksumSuffixes identify signature, certificate, and checksum
-// companion files that accompany released artifacts.
-var signatureOrChecksumSuffixes = []string{
-	".sig", ".asc", ".pem", ".cert", ".crt", ".p7s", ".minisig",
-	".sha", ".sha1", ".sha224", ".sha256", ".sha384", ".sha512", ".md5",
-}
-
-// isSignatureOrChecksumAsset reports whether a release asset name is a signature
-// or checksum companion file rather than a compiled artifact.
-func isSignatureOrChecksumAsset(lower string) bool {
-	for _, suffix := range signatureOrChecksumSuffixes {
-		if strings.HasSuffix(lower, suffix) {
-			return true
-		}
-	}
-	for _, token := range sbomTokens(lower) {
-		switch token {
-		case "checksums", "checksum",
-			"shasums", "sha1sums", "sha256sums", "sha512sums", "md5sums", "b2sums":
-			return true
-		}
-	}
-	return false
 }
 
 // testExecutionDocumentationEvidence gathers README and CONTRIBUTING content
