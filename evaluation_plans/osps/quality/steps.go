@@ -203,6 +203,35 @@ func normalizeRepoURL(raw string) string {
 	return url
 }
 
+// checkEvidenceDiagnostic reports incomplete connections in the selected PR
+// sample. A full page is not necessarily truncated; only explicit false proves
+// that an observed connection has no additional page.
+func checkEvidenceDiagnostic(payload data.Payload) string {
+	for pi, pr := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		// Preserve legacy null-parent behavior; null does not prove no checks exist.
+		if pr.StatusCheckRollup == nil {
+			continue
+		}
+		suites := pr.StatusCheckRollup.Commit.CheckSuites
+		if suites.PageInfo.HasNextPage == nil {
+			return fmt.Sprintf("check-suite completeness unavailable for pull-request sample %d (%d returned suites); manual review required", pi+1, len(suites.Nodes))
+		}
+		if *suites.PageInfo.HasNextPage {
+			return fmt.Sprintf("check suites truncated for pull-request sample %d (%d returned suites, hasNextPage=true); manual review required", pi+1, len(suites.Nodes))
+		}
+		for si, suite := range suites.Nodes {
+			runs := suite.CheckRuns
+			if runs.PageInfo.HasNextPage == nil {
+				return fmt.Sprintf("check-run completeness unavailable for pull-request sample %d, suite %d (%d returned runs); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+			if *runs.PageInfo.HasNextPage {
+				return fmt.Sprintf("check runs truncated for pull-request sample %d, suite %d (%d returned runs, hasNextPage=true); manual review required", pi+1, si+1, len(runs.Nodes))
+			}
+		}
+	}
+	return ""
+}
+
 // requiredChecksResult turns a coverage comparison into a control result.
 // passMessage is the message when every check is covered without a gate.
 func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string) (gemara.Result, string, gemara.ConfidenceLevel) {
@@ -213,6 +242,9 @@ func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string
 	if len(coverage.uncertain) > 0 {
 		return gemara.NeedsReview, fmt.Sprintf("Some executed status checks are not required by name and their workflow could not be inspected for a required gate job that covers them: %s. Manually review whether a required job gates them", strings.Join(coverage.uncertain, ", ")), gemara.Low
 	}
+	if coverage.incompleteEvidence != "" {
+		return gemara.NeedsReview, coverage.incompleteEvidence, gemara.Low
+	}
 	if len(coverage.gates) > 0 {
 		return gemara.Passed, fmt.Sprintf("%s (checks not required by name are covered by required gate job %s)", passMessage, strings.Join(coverage.gates, ", ")), confidence
 	}
@@ -222,6 +254,9 @@ func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string
 func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	// Branch rulesets are fetched once during payload load.
 	if !payload.RepositoryMetadata.HasBranchRules() {
+		if message := checkEvidenceDiagnostic(payload); message != "" {
+			return gemara.NeedsReview, message, gemara.Low
+		}
 		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
 	}
 
@@ -334,6 +369,10 @@ func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, messa
 
 	if len(statusChecks) > 0 {
 		return gemara.Passed, fmt.Sprintf("%d status checks were run", len(statusChecks)), confidence
+	}
+
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
 	}
 
 	return gemara.Failed, "No status checks were run", confidence
