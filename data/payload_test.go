@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	hclog "github.com/hashicorp/go-hclog"
@@ -42,7 +43,9 @@ func TestCheckConnectionPageInfo(t *testing.T) {
 				assert.Contains(t, q, "checkRuns(first:25){pageInfo{hasNextPage},nodes{")
 				assert.Contains(t, q, "associatedPullRequests(last:1)")
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"data":{"repository":{"name":"fixture","defaultBranchRef":{"target":{"associatedPullRequests":{"nodes":[{"statusCheckRollup":{"commit":{"checkSuites":{"nodes":[{"checkRuns":{"nodes":[]%s}}]%s}}}}]}}}}}}`, tt.metadata, tt.metadata)
+				if _, err := fmt.Fprintf(w, `{"data":{"repository":{"name":"fixture","defaultBranchRef":{"target":{"associatedPullRequests":{"nodes":[{"statusCheckRollup":{"commit":{"checkSuites":{"nodes":[{"checkRuns":{"nodes":[]%s}}]%s}}}}]}}}}}}`, tt.metadata, tt.metadata); err != nil {
+					t.Error(err)
+				}
 			}))
 			t.Cleanup(server.Close)
 			client := githubv4.NewEnterpriseClient(server.URL, server.Client())
@@ -188,5 +191,103 @@ func TestFetchWorkflowFiles(t *testing.T) {
 			Path:    ".github/workflows/ci.yml",
 			Content: "on: push",
 		}}, files)
+	})
+}
+
+// batchServer fakes GitHub for the batched tree fallback: the full tree query
+// gets fullStatus, the shape query gets shape, and each batch query answers
+// isBinary from binary by oid, or batchStatus when that is not 200.
+func batchServer(t *testing.T, fullStatus int, shape string, binary map[string]bool, batchStatus int) (*githubv4.Client, *[]string) {
+	var mu sync.Mutex
+	var batched []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string
+			Variables map[string]string
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(req.Query, "b0:"):
+			if batchStatus != http.StatusOK {
+				w.WriteHeader(batchStatus)
+				return
+			}
+			objects := map[string]any{}
+			mu.Lock()
+			for name, oid := range req.Variables {
+				if strings.HasPrefix(name, "p") {
+					batched = append(batched, oid)
+					objects["b"+name[1:]] = map[string]any{"isBinary": binary[oid], "isTruncated": false}
+				}
+			}
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": objects}})
+		case strings.Contains(req.Query, "isBinary"):
+			// The full three-level query: what GitHub does to a large repository.
+			w.WriteHeader(fullStatus)
+		default:
+			_, _ = w.Write([]byte(shape))
+		}
+	}))
+	t.Cleanup(server.Close)
+	return githubv4.NewEnterpriseClient(server.URL, server.Client()), &batched
+}
+
+func TestFetchGraphqlRepoTreeFallsBackToBatches(t *testing.T) {
+	cfg := &config.Config{Logger: hclog.NewNullLogger()}
+	shape := `{"data":{"repository":{"object":{"entries":[` +
+		`{"name":"README.md","type":"blob","path":"README.md","mode":33188,"oid":"o-readme","object":{}},` +
+		`{"name":"logo.png","type":"blob","path":"logo.png","mode":33261,"oid":"o-logo","object":{}},` +
+		`{"name":"bin","type":"tree","path":"bin","mode":16384,"object":{"entries":[` +
+		`{"name":"tool","type":"blob","path":"bin/tool","mode":33261,"oid":"o-tool","object":{}},` +
+		`{"name":"sub","type":"tree","path":"bin/sub","mode":16384,"object":{"entries":[` +
+		`{"name":"deep","type":"blob","path":"bin/sub/deep","mode":33261,"oid":"o-deep"}]}}]}}]}}}}`
+	binary := map[string]bool{"o-tool": true, "o-deep": true}
+
+	t.Run("binary status is batched by blob oid", func(t *testing.T) {
+		client, batched := batchServer(t, http.StatusBadGateway, shape, binary, http.StatusOK)
+
+		tree, err := fetchGraphqlRepoTree(cfg, client, "HEAD")
+		require.NoError(t, err)
+
+		binaries, err := checkTreeForBinaries(tree, &binaryChecker{logger: cfg.Logger})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"tool", "deep"}, binaries)
+		assert.ElementsMatch(t, []string{"o-readme", "o-tool", "o-deep"}, *batched,
+			"every blob but acceptable binary formats is batched, at the same depth as the full query")
+	})
+
+	t.Run("more than one batch of blobs", func(t *testing.T) {
+		entries := make([]string, isBinaryBatchSize+1)
+		for i := range entries {
+			entries[i] = fmt.Sprintf(`{"name":"f%d","type":"blob","path":"f%d","mode":33261,"oid":"o%d","object":{}}`, i, i, i)
+		}
+		big := `{"data":{"repository":{"object":{"entries":[` + strings.Join(entries, ",") + `]}}}}`
+		last := fmt.Sprintf("o%d", isBinaryBatchSize)
+		client, batched := batchServer(t, http.StatusBadGateway, big, map[string]bool{last: true}, http.StatusOK)
+
+		tree, err := fetchGraphqlRepoTree(cfg, client, "HEAD")
+		require.NoError(t, err)
+
+		binaries, err := checkTreeForBinaries(tree, &binaryChecker{logger: cfg.Logger})
+		require.NoError(t, err)
+		assert.Equal(t, []string{fmt.Sprintf("f%d", isBinaryBatchSize)}, binaries)
+		assert.Len(t, *batched, isBinaryBatchSize+1)
+	})
+
+	t.Run("a failing batch fails the tree", func(t *testing.T) {
+		client, _ := batchServer(t, http.StatusBadGateway, shape, binary, http.StatusUnauthorized)
+
+		_, err := fetchGraphqlRepoTree(cfg, client, "HEAD")
+		require.Error(t, err)
+	})
+
+	t.Run("a non-transient error does not fall back", func(t *testing.T) {
+		client, batched := batchServer(t, http.StatusUnauthorized, shape, binary, http.StatusOK)
+
+		_, err := fetchGraphqlRepoTree(cfg, client, "HEAD")
+		require.ErrorContains(t, err, "401")
+		assert.Empty(t, *batched)
 	})
 }

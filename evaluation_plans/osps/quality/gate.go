@@ -17,7 +17,7 @@ type executedCheck struct {
 // checkCoverage is the outcome of comparing executed checks to the required
 // ones. missing checks are definitely not covered. uncertain checks belong to a
 // workflow that could not be inspected, so a gate there cannot be ruled out.
-// incompleteEvidence means no definitive coverage comparison was possible.
+// incompleteEvidence prevents a pass, but does not invalidate a visible miss.
 type checkCoverage struct {
 	incompleteEvidence string
 	missing            []string
@@ -59,9 +59,6 @@ func executedStatusChecks(payload data.Payload) []executedCheck {
 // check as passing, so a gate without such a condition proves nothing.
 // A gate must also be able to fail on its dependencies, see failsOnNeeds.
 func uncoveredChecks(payload data.Payload, required []string) checkCoverage {
-	if diagnostic := checkEvidenceDiagnostic(payload); diagnostic != "" {
-		return checkCoverage{incompleteEvidence: diagnostic}
-	}
 	requiredSet := make(map[string]bool, len(required))
 	for _, name := range required {
 		requiredSet[name] = true
@@ -74,7 +71,7 @@ func uncoveredChecks(payload data.Payload, required []string) checkCoverage {
 		}
 	}
 
-	var coverage checkCoverage
+	coverage := checkCoverage{incompleteEvidence: checkEvidenceDiagnostic(payload)}
 	if len(unmatched) == 0 {
 		return coverage
 	}
@@ -132,7 +129,7 @@ func loadGateWorkflows(payload data.Payload, unmatched []executedCheck) (map[str
 		if !needed[path] || file.Truncated {
 			continue
 		}
-		workflow, err := actionlint.Parse([]byte(file.Content))
+		workflow, err := data.ParseWorkflow([]byte(file.Content))
 		if err != nil || workflow == nil {
 			continue
 		}

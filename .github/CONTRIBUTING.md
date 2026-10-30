@@ -20,7 +20,7 @@ You may also pull the code locally and run the local Dockerfile:
 
 ## Required Token Scopes
 
-![Token Scopes](../token-scopes.png)
+![Token Scopes](token-scopes.png)
 
 ## Code Submission
 

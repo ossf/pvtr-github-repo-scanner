@@ -112,7 +112,7 @@ func evaluateWorkflows(workflows []data.WorkflowFile, checkWorkflow func(*action
 			continue
 		}
 
-		workflow, actionError := actionlint.Parse([]byte(file.Content))
+		workflow, actionError := data.ParseWorkflow([]byte(file.Content))
 		if actionError != nil {
 			uninspected = append(uninspected, fmt.Sprintf("%s (%v)", file.Path, actionError))
 			continue
@@ -189,7 +189,7 @@ func evaluateUntrustedCodeIsolation(workflows []data.WorkflowFile) (gemara.Resul
 			uninspected = append(uninspected, fmt.Sprintf("%s (too large to retrieve)", file.Path))
 			continue
 		}
-		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		workflow, parseErr := data.ParseWorkflow([]byte(file.Content))
 		if parseErr != nil {
 			uninspected = append(uninspected, fmt.Sprintf("%s (%v)", file.Path, parseErr))
 			continue
@@ -1188,7 +1188,7 @@ func evaluateCollaboratorInputSanitization(workflows []data.WorkflowFile) (gemar
 			uninspected = append(uninspected, fmt.Sprintf("%s (too large to retrieve)", file.Path))
 			continue
 		}
-		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		workflow, parseErr := data.ParseWorkflow([]byte(file.Content))
 		if parseErr != nil {
 			uninspected = append(uninspected, fmt.Sprintf("%s (%v)", file.Path, parseErr))
 			continue

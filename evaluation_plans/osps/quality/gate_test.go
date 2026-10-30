@@ -369,12 +369,15 @@ func TestGateCheckEvidenceCompleteness(t *testing.T) {
 			if tc.incomplete {
 				want = gemara.NeedsReview
 			}
+			if tc.visibleMiss {
+				want = gemara.Failed
+			}
 			check := func(result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 				t.Helper()
 				if result != want {
 					t.Errorf("got %s (%s); want %s", result, message, want)
 				}
-				if tc.incomplete && (confidence != gemara.Low || !strings.Contains(message, "manual review required")) {
+				if want == gemara.NeedsReview && (confidence != gemara.Low || !strings.Contains(message, "manual review required")) {
 					t.Errorf("incomplete evidence needs a concrete review diagnostic: %s/%s %q", result, confidence, message)
 				}
 			}

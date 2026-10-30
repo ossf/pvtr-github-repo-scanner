@@ -236,14 +236,14 @@ func checkEvidenceDiagnostic(payload data.Payload) string {
 // passMessage is the message when every check is covered without a gate.
 func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	var confidence gemara.ConfidenceLevel
-	if coverage.incompleteEvidence != "" {
-		return gemara.NeedsReview, coverage.incompleteEvidence, gemara.Low
-	}
 	if len(coverage.missing) > 0 {
 		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s%s", strings.Join(coverage.missing, ", "), failSuffix), confidence
 	}
 	if len(coverage.uncertain) > 0 {
 		return gemara.NeedsReview, fmt.Sprintf("Some executed status checks are not required by name and their workflow could not be inspected for a required gate job that covers them: %s. Manually review whether a required job gates them", strings.Join(coverage.uncertain, ", ")), gemara.Low
+	}
+	if coverage.incompleteEvidence != "" {
+		return gemara.NeedsReview, coverage.incompleteEvidence, gemara.Low
 	}
 	if len(coverage.gates) > 0 {
 		return gemara.Passed, fmt.Sprintf("%s (checks not required by name are covered by required gate job %s)", passMessage, strings.Join(coverage.gates, ", ")), confidence
@@ -252,12 +252,11 @@ func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string
 }
 
 func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if message := checkEvidenceDiagnostic(payload); message != "" {
-		return gemara.NeedsReview, message, gemara.Low
-	}
-
 	// Branch rulesets are fetched once during payload load.
 	if !payload.RepositoryMetadata.HasBranchRules() {
+		if message := checkEvidenceDiagnostic(payload); message != "" {
+			return gemara.NeedsReview, message, gemara.Low
+		}
 		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
 	}
 
@@ -268,17 +267,12 @@ func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Resu
 }
 
 func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if message := checkEvidenceDiagnostic(payload); message != "" {
-		return gemara.NeedsReview, message, gemara.Low
-	}
-
 	coverage := uncoveredChecks(payload, payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts)
 	return requiredChecksResult(coverage, "No status checks were run that are not required by branch protection", "")
 }
 
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// TODO: This only checks the top 3 levels of the repository tree
-	// for common binary file extensions and it fails on very large repositories.
+	// TODO: This only checks the top 3 levels of the repository tree.
 	suspectedBinaries := payload.Binaries.Suspected
 	if payload.Binaries.Err != nil {
 		payload.Config.Logger.Trace(fmt.Sprintf("unexpected response while checking for binaries: %s", payload.Binaries.Err.Error()))
@@ -370,25 +364,15 @@ func RequiresNonAuthorApproval(payload data.Payload) (result gemara.Result, mess
 }
 
 func HasOneOrMoreStatusChecks(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if message := checkEvidenceDiagnostic(payload); message != "" {
-		return gemara.NeedsReview, message, gemara.Low
-	}
-
 	// get the name of all status checks that were run
-	var statusChecks []string
-	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
-		if check.StatusCheckRollup == nil {
-			continue
-		}
-		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
-			for _, checkRun := range run.CheckRuns.Nodes {
-				statusChecks = append(statusChecks, checkRun.Name)
-			}
-		}
-	}
+	statusChecks := executedStatusChecks(payload)
 
 	if len(statusChecks) > 0 {
 		return gemara.Passed, fmt.Sprintf("%d status checks were run", len(statusChecks)), confidence
+	}
+
+	if message := checkEvidenceDiagnostic(payload); message != "" {
+		return gemara.NeedsReview, message, gemara.Low
 	}
 
 	return gemara.Failed, "No status checks were run", confidence

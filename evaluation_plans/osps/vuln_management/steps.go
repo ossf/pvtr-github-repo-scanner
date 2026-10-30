@@ -394,7 +394,7 @@ func detectSastInWorkflows(files []data.WorkflowFile, defaultBranch string) sast
 			detection.inspectionBlocked = true
 			continue
 		}
-		workflow, err := actionlint.Parse([]byte(file.Content))
+		workflow, err := data.ParseWorkflow([]byte(file.Content))
 		if err != nil || workflow == nil {
 			detection.inspectionBlocked = true
 			continue
@@ -1237,7 +1237,7 @@ func detectSCAInWorkflows(files []data.WorkflowFile, defaultBranch string) scaDe
 			detection.inspectionBlocked = true
 			continue
 		}
-		workflow, errs := actionlint.Parse([]byte(file.Content))
+		workflow, errs := data.ParseWorkflow([]byte(file.Content))
 		if workflow == nil {
 			detection.inspectionBlocked = true
 			continue
@@ -1512,7 +1512,7 @@ func releaseScaWorkflow(payload data.Payload) (path string, inspectionBlocked bo
 			inspectionBlocked = true
 			continue
 		}
-		workflow, errs := actionlint.Parse([]byte(file.Content))
+		workflow, errs := data.ParseWorkflow([]byte(file.Content))
 		if workflow == nil {
 			inspectionBlocked = true
 			continue

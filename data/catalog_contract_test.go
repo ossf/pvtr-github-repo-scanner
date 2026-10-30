@@ -3,6 +3,7 @@ package data
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/gemaraproj/go-gemara"
@@ -79,4 +80,38 @@ func TestOSPSBaseline202602RequirementSet(t *testing.T) {
 
 	assert.NotContains(t, ids, "OSPS-BR-01.02",
 		"OSPS-BR-01.02 was retired upstream and must not appear in the 2026.02 catalog")
+}
+
+// TestMaturityLevelsAreCumulative guards against a requirement tagged for a
+// lower maturity level but missing a higher one: Baseline levels are
+// cumulative, and a scan at the higher level would silently skip it.
+func TestMaturityLevelsAreCumulative(t *testing.T) {
+	entries, err := os.ReadDir("catalogs")
+	if err != nil {
+		t.Fatalf("failed to read catalog directory: %v", err)
+	}
+	levels := []string{"maturity-1", "maturity-2", "maturity-3"}
+	for _, entry := range entries {
+		raw, err := os.ReadFile(filepath.Join("catalogs", entry.Name()))
+		if err != nil {
+			t.Fatalf("failed to read catalog %s: %v", entry.Name(), err)
+		}
+		var catalog gemara.ControlCatalog
+		if err := yaml.Unmarshal(raw, &catalog); err != nil {
+			t.Fatalf("failed to parse catalog %s: %v", entry.Name(), err)
+		}
+		for _, control := range catalog.Controls {
+			for _, req := range control.AssessmentRequirements {
+				for i, level := range levels {
+					if !slices.Contains(req.Applicability, level) {
+						continue
+					}
+					for _, higher := range levels[i+1:] {
+						assert.Contains(t, req.Applicability, higher, "%s: %s applies at %s but not %s", entry.Name(), req.Id, level, higher)
+					}
+					break
+				}
+			}
+		}
+	}
 }

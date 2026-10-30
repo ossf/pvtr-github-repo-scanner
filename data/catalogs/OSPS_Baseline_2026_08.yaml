@@ -343,6 +343,8 @@ controls:
   - assessment-requirements:
       - applicability:
           - maturity-1
+          - maturity-2
+          - maturity-3
         id: OSPS-BR-07.01
         recommendation: >
           Configure .gitignore or equivalent to exclude files that may contain
@@ -1189,6 +1191,8 @@ controls:
   - assessment-requirements:
       - applicability:
           - maturity-1
+          - maturity-2
+          - maturity-3
         id: OSPS-VM-02.01
         recommendation: |
           Create a security.md (or similarly-named) file that contains security

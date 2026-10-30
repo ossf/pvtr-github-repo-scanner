@@ -75,24 +75,24 @@ func TestCheckEvidenceCompleteness(t *testing.T) {
 		want03, want06 gemara.Result
 		message        string
 	}{
-		{"hidden run after 25", []int{25}, complete, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned runs"},
-		{"hidden suite after 25", ones, truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned suites"},
+		{"hidden run after 25", []int{25}, complete, truncated, false, gemara.NeedsReview, gemara.Passed, "25 returned runs"},
+		{"hidden suite after 25", ones, truncated, complete, false, gemara.NeedsReview, gemara.Passed, "25 returned suites"},
 		{"25 empty suites hide a run", make([]int, 25), truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "25 returned suites"},
 		{"exactly 25 complete runs", []int{25}, complete, complete, false, gemara.Passed, gemara.Passed, ""},
 		{"exactly 25 complete suites", ones, complete, complete, false, gemara.Passed, gemara.Passed, ""},
 		{"exactly 25 empty suites", make([]int, 25), complete, complete, false, gemara.Passed, gemara.Failed, ""},
-		{"short truncated run page", []int{1}, complete, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "1 returned runs"},
-		{"short truncated suite page", []int{1}, truncated, complete, false, gemara.NeedsReview, gemara.NeedsReview, "1 returned suites"},
-		{"both connections truncated", []int{1}, truncated, truncated, false, gemara.NeedsReview, gemara.NeedsReview, "check suites"},
-		{"observed violation on incomplete page", []int{25}, complete, truncated, true, gemara.NeedsReview, gemara.NeedsReview, "check runs"},
+		{"short truncated run page", []int{1}, complete, truncated, false, gemara.NeedsReview, gemara.Passed, "1 returned runs"},
+		{"short truncated suite page", []int{1}, truncated, complete, false, gemara.NeedsReview, gemara.Passed, "1 returned suites"},
+		{"both connections truncated", []int{1}, truncated, truncated, false, gemara.NeedsReview, gemara.Passed, "check suites"},
+		{"observed violation on incomplete page", []int{25}, complete, truncated, true, gemara.Failed, gemara.Passed, "check runs"},
 		{"complete violation", []int{1}, complete, complete, true, gemara.Failed, gemara.Passed, ""},
 		{"complete empty connections", []int{0}, complete, complete, false, gemara.Passed, gemara.Failed, ""},
-		{"missing suite metadata", []int{1}, "", complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
-		{"null suite metadata", []int{1}, "null", complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
-		{"null suite flag", []int{1}, `{"hasNextPage":null}`, complete, false, gemara.NeedsReview, gemara.NeedsReview, "check-suite completeness unavailable"},
-		{"missing run metadata", []int{1}, complete, "", false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
-		{"null run metadata", []int{1}, complete, "null", false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
-		{"null run flag", []int{1}, complete, `{"hasNextPage":null}`, false, gemara.NeedsReview, gemara.NeedsReview, "check-run completeness unavailable"},
+		{"missing suite metadata", []int{1}, "", complete, false, gemara.NeedsReview, gemara.Passed, "check-suite completeness unavailable"},
+		{"null suite metadata", []int{1}, "null", complete, false, gemara.NeedsReview, gemara.Passed, "check-suite completeness unavailable"},
+		{"null suite flag", []int{1}, `{"hasNextPage":null}`, complete, false, gemara.NeedsReview, gemara.Passed, "check-suite completeness unavailable"},
+		{"missing run metadata", []int{1}, complete, "", false, gemara.NeedsReview, gemara.Passed, "check-run completeness unavailable"},
+		{"null run metadata", []int{1}, complete, "null", false, gemara.NeedsReview, gemara.Passed, "check-run completeness unavailable"},
+		{"null run flag", []int{1}, complete, `{"hasNextPage":null}`, false, gemara.NeedsReview, gemara.Passed, "check-run completeness unavailable"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestCheckEvidenceCompleteness(t *testing.T) {
 					if result != step.want {
 						t.Errorf("got %s, want %s: %s", result, step.want, message)
 					}
-					if tt.message != "" && (!strings.Contains(message, tt.message) || confidence != gemara.Low) {
+					if step.want == gemara.NeedsReview && tt.message != "" && (!strings.Contains(message, tt.message) || confidence != gemara.Low) {
 						t.Errorf("diagnostic=%q confidence=%v", message, confidence)
 					}
 				})
@@ -150,7 +150,7 @@ func TestCheckEvidenceHiddenCounterexamples(t *testing.T) {
 				rp.Nodes = rp.Nodes[:25]
 				setCheckPageInfo(t, rp, `{"hasNextPage":true}`)
 			}
-			for _, steps := range [][]func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){
+			for control, steps := range [][]func(data.Payload) (gemara.Result, string, gemara.ConfidenceLevel){
 				{StatusChecksAreRequiredByRulesets, StatusChecksAreRequiredByBranchProtection},
 				{reusable_steps.IsCodeRepo, HasOneOrMoreStatusChecks},
 			} {
@@ -162,8 +162,12 @@ func TestCheckEvidenceHiddenCounterexamples(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got := a.Run(p); got != gemara.NeedsReview {
-					t.Errorf("truncated assessment=%s, want NeedsReview: %s", got, a.Message)
+				want := gemara.NeedsReview
+				if control == 1 && tt.name != "hidden only run" {
+					want = gemara.Passed
+				}
+				if got := a.Run(p); got != want {
+					t.Errorf("truncated assessment=%s, want %s: %s", got, want, a.Message)
 				}
 				if a.StepsExecuted != 2 {
 					t.Errorf("executed %d steps, want 2", a.StepsExecuted)
@@ -174,7 +178,7 @@ func TestCheckEvidenceHiddenCounterexamples(t *testing.T) {
 }
 
 func TestCheckEvidenceLaterSuiteAndApplicability(t *testing.T) {
-	p := checkEvidence(t, []int{1, 1}, `{"hasNextPage":false}`, `{"hasNextPage":false}`, true)
+	p := checkEvidence(t, []int{1, 1}, `{"hasNextPage":false}`, `{"hasNextPage":false}`, false)
 	runs := &p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites.Nodes[1].CheckRuns
 	setCheckPageInfo(t, runs, `{"hasNextPage":true}`)
 	var steps []gemara.AssessmentStep
@@ -778,6 +782,62 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 				RepositoryMetadata: tt.metadata,
 			}
 			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			if result != tt.wantResult {
+				t.Errorf("result = %v, want %v", result, tt.wantResult)
+			}
+			if message != tt.wantMsg {
+				t.Errorf("message = %q, want %q", message, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func Test_HasOneOrMoreStatusChecks(t *testing.T) {
+	tests := []struct {
+		name       string
+		runs       []checkRun
+		wantResult gemara.Result
+		wantMsg    string
+	}{
+		{
+			name:       "no check runs on the pull request",
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name:       "every run was skipped",
+			runs:       []checkRun{{name: "build", conclusion: "SKIPPED"}, {name: "lint", conclusion: "SKIPPED"}},
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name:       "every run was skipped or neutral",
+			runs:       []checkRun{{name: "build", conclusion: "SKIPPED"}, {name: "lint", conclusion: "NEUTRAL"}},
+			wantResult: gemara.Failed,
+			wantMsg:    "No status checks were run",
+		},
+		{
+			name: "skipped and neutral runs alongside a successful run",
+			runs: []checkRun{
+				{name: "build", conclusion: "SUCCESS"},
+				{name: "lint", conclusion: "SKIPPED"},
+				{name: "docs", conclusion: "NEUTRAL"},
+			},
+			wantResult: gemara.Passed,
+			wantMsg:    "1 status checks were run",
+		},
+		{
+			name:       "failed and unfinished runs still count",
+			runs:       []checkRun{{name: "build", conclusion: "FAILURE"}, {name: "lint"}},
+			wantResult: gemara.Passed,
+			wantMsg:    "2 status checks were run",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := data.Payload{GraphqlRepoData: graphqlWithCheckRuns(t, tt.runs...)}
+			result, message, _ := HasOneOrMoreStatusChecks(payload)
 			if result != tt.wantResult {
 				t.Errorf("result = %v, want %v", result, tt.wantResult)
 			}
@@ -1948,5 +2008,29 @@ func TestRequiresNonAuthorApproval(t *testing.T) {
 				t.Errorf("confidence = %v, want %v", confidence, testCase.wantConfidence)
 			}
 		})
+	}
+}
+func TestIncompleteStatusCheckPresenceFiltering(t *testing.T) {
+	for _, metadata := range []string{`{"hasNextPage":true}`, "null", ""} {
+		for _, conclusion := range []string{"SKIPPED", "NEUTRAL", "SUCCESS", ""} {
+			t.Run(metadata+"/"+conclusion, func(t *testing.T) {
+				p := checkEvidence(t, []int{1}, `{"hasNextPage":false}`, metadata, false)
+				p.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes[0].StatusCheckRollup.Commit.CheckSuites.Nodes[0].CheckRuns.Nodes[0].Conclusion = conclusion
+				result, message, confidence := HasOneOrMoreStatusChecks(p)
+				want := gemara.Passed
+				if conclusion == "SKIPPED" || conclusion == "NEUTRAL" {
+					want = gemara.NeedsReview
+				}
+				if result != want {
+					t.Fatalf("got %s, want %s: %s", result, want, message)
+				}
+				if want == gemara.NeedsReview && (confidence != gemara.Low || !strings.Contains(message, "manual review required")) {
+					t.Fatalf("missing incomplete-evidence diagnostic: %s/%s %q", result, confidence, message)
+				}
+				if want == gemara.Passed && message != "1 status checks were run" {
+					t.Fatalf("unexpected visible count: %q", message)
+				}
+			})
+		}
 	}
 }

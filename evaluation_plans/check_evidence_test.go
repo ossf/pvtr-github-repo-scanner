@@ -98,7 +98,8 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 					if control == "OSPS-QA-06.01" && tc.suites*tc.runs == 0 {
 						want = gemara.Failed
 					}
-					if tc.review {
+					needsReview := tc.review && (control == "OSPS-QA-03.01" || tc.suites*tc.runs == 0)
+					if needsReview {
 						want, confidence = gemara.NeedsReview, gemara.Low
 					}
 					check := func(result gemara.Result, message string, c gemara.ConfidenceLevel) {
@@ -106,7 +107,7 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 						if result != want || c != confidence {
 							t.Errorf("got %s/%s (%s); want %s/%s", result, c, message, want, confidence)
 						}
-						if tc.review && !strings.Contains(message, "manual review required") {
+						if needsReview && !strings.Contains(message, "manual review required") {
 							t.Errorf("missing review diagnostic: %q", message)
 						}
 					}

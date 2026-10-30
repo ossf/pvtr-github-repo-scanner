@@ -186,7 +186,7 @@ func evaluateWorkflowPermissionsFromFiles(files []data.WorkflowFile) (gemara.Res
 			unscoped = append(unscoped, file.Path)
 			continue
 		}
-		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		workflow, parseErr := data.ParseWorkflow([]byte(file.Content))
 		if parseErr != nil || workflow == nil {
 			unscoped = append(unscoped, file.Path)
 			continue
@@ -350,7 +350,7 @@ func workflowJobPermissionsEvidence(payload data.Payload, workflows []data.Workf
 		if file.Truncated {
 			return "", nil, fmt.Errorf("workflow %s is truncated", file.Path)
 		}
-		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		workflow, parseErr := data.ParseWorkflow([]byte(file.Content))
 		if parseErr != nil || workflow == nil {
 			return "", nil, fmt.Errorf("workflow %s could not be parsed", file.Path)
 		}
@@ -436,7 +436,7 @@ func evaluateWorkflowJobPermissions(workflows []data.WorkflowFile) (gemara.Resul
 			continue
 		}
 
-		workflow, parseErr := actionlint.Parse([]byte(file.Content))
+		workflow, parseErr := data.ParseWorkflow([]byte(file.Content))
 		if parseErr != nil || workflow == nil {
 			uninspected = append(uninspected, fmt.Sprintf("%s (could not be parsed)", file.Path))
 			continue
