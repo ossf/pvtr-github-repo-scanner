@@ -407,9 +407,9 @@ func Test_NoUnreviewableBinariesInRepo(t *testing.T) {
 	}
 }
 
-// fakeRulesetMetadata stubs only the ruleset accessors; embedding the interface
-// leaves every other method unimplemented, which is intentional — a step that
-// reaches for one should fail loudly rather than read a zero value.
+// fakeRulesetMetadata provides fully observable protection data. Embedding the
+// interface leaves every other method unimplemented, which is intentional — a
+// step that reaches for one should fail loudly rather than read a zero value.
 type fakeRulesetMetadata struct {
 	data.RepositoryMetadata
 	hasRules       bool
@@ -418,6 +418,9 @@ type fakeRulesetMetadata struct {
 
 func (f *fakeRulesetMetadata) HasBranchRules() bool                  { return f.hasRules }
 func (f *fakeRulesetMetadata) RequiredStatusCheckContexts() []string { return f.requiredChecks }
+func (f *fakeRulesetMetadata) RulesetsObserved() bool                { return true }
+func (f *fakeRulesetMetadata) ViewerCanAdminister() bool             { return true }
+func (f *fakeRulesetMetadata) DefaultBranchProtectedFlag() *bool     { return nil }
 
 // grow appends one zero value to the slice addressed by slicePtr. The status
 // check nodes are deeply nested anonymous structs, so spelling their types out
@@ -505,25 +508,25 @@ var conclusionCases = []struct {
 	},
 }
 
-func Test_StatusChecksAreRequiredByRulesets_Conclusions(t *testing.T) {
+func Test_StatusChecksAreRequired_RulesetConclusions(t *testing.T) {
 	for _, tt := range conclusionCases {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := data.Payload{
 				GraphqlRepoData:    graphqlWithCheckRuns(t, tt.runs...),
 				RepositoryMetadata: &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build"}},
 			}
-			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			result, message, _ := StatusChecksAreRequired(payload)
 			assertConclusionResult(t, result, message, tt.wantFailed, tt.wantMissing)
 		})
 	}
 }
 
-func Test_StatusChecksAreRequiredByBranchProtection_Conclusions(t *testing.T) {
+func Test_StatusChecksAreRequired_ClassicConclusions(t *testing.T) {
 	for _, tt := range conclusionCases {
 		t.Run(tt.name, func(t *testing.T) {
 			graphql := graphqlWithCheckRuns(t, tt.runs...)
 			graphql.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = []string{"build"}
-			result, message, _ := StatusChecksAreRequiredByBranchProtection(data.Payload{GraphqlRepoData: graphql})
+			result, message, _ := StatusChecksAreRequired(data.Payload{GraphqlRepoData: graphql, RepositoryMetadata: &fakeRulesetMetadata{}})
 			assertConclusionResult(t, result, message, tt.wantFailed, tt.wantMissing)
 		})
 	}
@@ -545,7 +548,7 @@ func assertConclusionResult(t *testing.T, result gemara.Result, message string, 
 	}
 }
 
-func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
+func Test_StatusChecksAreRequired_Rulesets(t *testing.T) {
 	tests := []struct {
 		name          string
 		metadata      *fakeRulesetMetadata
@@ -557,14 +560,14 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 			name:       "no rulesets configured",
 			metadata:   &fakeRulesetMetadata{hasRules: false},
 			wantResult: gemara.Passed,
-			wantMsg:    "No rulesets found for default branch, continuing to evaluate branch protection",
+			wantMsg:    "No status checks were run that are not required by rulesets or branch protection",
 		},
 		{
 			name:          "every check that ran is required",
 			metadata:      &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build", "lint"}},
 			checksThatRan: []string{"build", "lint"},
 			wantResult:    gemara.Passed,
-			wantMsg:       "No status checks were run that are not required by the rules",
+			wantMsg:       "No status checks were run that are not required by rulesets or branch protection",
 		},
 		{
 			// The path that produces a non-passing compliance result, and the
@@ -574,7 +577,7 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 			metadata:      &fakeRulesetMetadata{hasRules: true, requiredChecks: []string{"build"}},
 			checksThatRan: []string{"build", "lint"},
 			wantResult:    gemara.Failed,
-			wantMsg:       "Some executed status checks are not mandatory but all should be: lint (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)",
+			wantMsg:       "Some executed status checks are not mandatory but all should be: lint",
 		},
 	}
 
@@ -584,7 +587,7 @@ func Test_StatusChecksAreRequiredByRulesets(t *testing.T) {
 				GraphqlRepoData:    graphqlWithStatusChecks(t, tt.checksThatRan...),
 				RepositoryMetadata: tt.metadata,
 			}
-			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			result, message, _ := StatusChecksAreRequired(payload)
 			if result != tt.wantResult {
 				t.Errorf("result = %v, want %v", result, tt.wantResult)
 			}

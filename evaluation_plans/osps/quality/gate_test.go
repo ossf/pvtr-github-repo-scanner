@@ -89,7 +89,7 @@ func gatePayload(t *testing.T, runs []gateRun, required []string, files ...data.
 	return data.NewPayloadWithWorkflowCache(base, files)
 }
 
-func Test_StatusChecksAreRequiredByRulesets_GateJob(t *testing.T) {
+func Test_StatusChecksAreRequired_RulesetGateJob(t *testing.T) {
 	covered := []gateRun{
 		{"lint", gateWorkflowPath},
 		{"unit", gateWorkflowPath},
@@ -142,7 +142,7 @@ func Test_StatusChecksAreRequiredByRulesets_GateJob(t *testing.T) {
 			required:   []string{"gate"},
 			files:      []data.WorkflowFile{workflowFile(gateWorkflowPath, gateWorkflow("always()"))},
 			wantResult: gemara.Failed,
-			wantMsg:    "all should be: docs ",
+			wantMsg:    "all should be: docs",
 		},
 		{
 			name:       "a matrix job is covered through its expanded check name",
@@ -168,7 +168,7 @@ func Test_StatusChecksAreRequiredByRulesets_GateJob(t *testing.T) {
 			required:   []string{"gate"},
 			files:      []data.WorkflowFile{workflowFile(gateWorkflowPath, gateWorkflow("always()"))},
 			wantResult: gemara.Failed,
-			wantMsg:    "all should be: DCO ",
+			wantMsg:    "all should be: DCO",
 		},
 		{
 			name:       "a gate that is not required covers nothing",
@@ -205,7 +205,7 @@ func Test_StatusChecksAreRequiredByRulesets_GateJob(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := gatePayload(t, tt.runs, tt.required, tt.files...)
-			result, message, confidence := StatusChecksAreRequiredByRulesets(payload)
+			result, message, confidence := StatusChecksAreRequired(payload)
 			if result != tt.wantResult {
 				t.Errorf("result = %v, want %v (message %q)", result, tt.wantResult, message)
 			}
@@ -219,14 +219,14 @@ func Test_StatusChecksAreRequiredByRulesets_GateJob(t *testing.T) {
 	}
 }
 
-func Test_StatusChecksAreRequiredByBranchProtection_GateJob(t *testing.T) {
+func Test_StatusChecksAreRequired_ClassicGateJob(t *testing.T) {
 	runs := []gateRun{{"lint", gateWorkflowPath}, {"gate", gateWorkflowPath}}
 	graphql := graphqlWithWorkflowRuns(t, runs...)
 	graphql.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = []string{"gate"}
 	payload := data.NewPayloadWithWorkflowCache(data.Payload{GraphqlRepoData: graphql},
 		[]data.WorkflowFile{workflowFile(gateWorkflowPath, gateWorkflow("always()"))})
 
-	result, message, _ := StatusChecksAreRequiredByBranchProtection(payload)
+	result, message, _ := StatusChecksAreRequired(payload)
 	if result != gemara.Passed {
 		t.Fatalf("result = %v, want Passed (message %q)", result, message)
 	}
@@ -251,7 +251,7 @@ jobs:
 		[]gateRun{{"call / inner", gateWorkflowPath}, {"gate", gateWorkflowPath}},
 		[]string{"gate"},
 		workflowFile(gateWorkflowPath, caller))
-	result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+	result, message, _ := StatusChecksAreRequired(payload)
 	if result != gemara.Passed {
 		t.Errorf("result = %v, want Passed (message %q)", result, message)
 	}
@@ -300,7 +300,7 @@ jobs:
 				[]gateRun{{"lint", gateWorkflowPath}, {"gate", gateWorkflowPath}},
 				[]string{"gate"},
 				workflowFile(gateWorkflowPath, header+tt.gate))
-			result, message, _ := StatusChecksAreRequiredByRulesets(payload)
+			result, message, _ := StatusChecksAreRequired(payload)
 			if result != tt.want {
 				t.Errorf("result = %v, want %v (message %q)", result, tt.want, message)
 			}
