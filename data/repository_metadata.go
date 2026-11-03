@@ -84,8 +84,7 @@ func (r *GitHubRepositoryMetadata) DefaultBranchRequiresPRReviews() *bool {
 }
 
 // HasBranchRules reports whether any ruleset at all applies to the default
-// branch, which determines whether rulesets or branch protection are treated as
-// the authoritative source for status check requirements.
+// branch. RulesetsObserved distinguishes an empty result from a failed lookup.
 func (r *GitHubRepositoryMetadata) HasBranchRules() bool {
 	if r.defaultBranchRules == nil {
 		return false
