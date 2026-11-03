@@ -62,15 +62,19 @@ func HasDesignDocumentation(payload data.Payload) (result gemara.Result, message
 			if entry.Type == "blob" {
 				for _, designFile := range DesignDocFiles {
 					if strings.EqualFold(entry.Name, designFile) {
-						// A matching root filename shows a design document exists.
-						// Its content is not fetched here; any AI review grades the
-						// separately declared Security Insights guide and is recorded
-						// as advisory evidence, but cannot lower this Passed.
+						// A matching root filename indicates a design document
+						// likely exists, but its content is not fetched here and
+						// a filename cannot show that it covers all actions and
+						// actors, so automation defers to manual review.
 						return gradeSecurityAssessmentDocumentation(
 							payload,
 							"OSPS-SA-01.01",
 							"design-documentation-coverage",
-							securityAssessmentVerdict{gemara.Passed, "Design documentation found: " + entry.Name, gemara.Low},
+							securityAssessmentVerdict{
+								gemara.NeedsReview,
+								"Design documentation found (" + entry.Name + "), but coverage of all actions and actors requires manual review",
+								gemara.Low,
+							},
 						)
 					}
 				}

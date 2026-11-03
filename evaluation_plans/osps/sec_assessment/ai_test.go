@@ -368,22 +368,20 @@ func TestDenialCommentPreservesDeterministicFailed(t *testing.T) {
 	}
 }
 
-// TestAIDoesNotDowngradeDeterministicPass covers H2: a successful AI fail on the
-// declared guide still records advisory evidence but does not lower the
-// deterministic design Passed earned from a root architecture.md.
-func TestAIDoesNotDowngradeDeterministicPass(t *testing.T) {
+// TestAIFailureGradesDesignFileMatch covers a root design file whose filename
+// match only earns NeedsReview: a failing AI review of the declared guide is not
+// floored, so it is reported and its analysis is retained as evidence.
+func TestAIFailureGradesDesignFileMatch(t *testing.T) {
 	stubDeclaredDocuments(t, func(string) (data.DocumentationFile, error) {
 		return data.DocumentationFile{Path: "docs/design.md", Content: "shallow guide"}, nil
 	})
 	client := &securityAssessmentAIClient{body: `{"result":"fail","confidence":"high","message":"Guide is shallow","explanation":"The declared guide does not cover the design.","citations":[]}`}
 	stubAIClientFactory(t, client, nil)
 	payload := declaredPayload()
-	result, message, confidence := HasDesignDocumentation(payload)
-	assert.Equal(t, gemara.Passed, result)
-	assert.Equal(t, "Design documentation found: architecture.md", message)
-	assert.Equal(t, gemara.Low, confidence)
-	assert.Equal(t, 1, client.calls, "the model is still consulted and its opinion recorded")
-	assert.Len(t, payload.GetEvidence(), 1, "AI analysis is retained even though it cannot lower the grade")
+	result, _, _ := HasDesignDocumentation(payload)
+	assert.Equal(t, gemara.Failed, result)
+	assert.Equal(t, 1, client.calls, "the model is consulted and its opinion recorded")
+	assert.Len(t, payload.GetEvidence(), 1, "AI analysis is retained as evidence")
 }
 
 // TestMisconfiguredClientKeepsDeterministicWithoutDeclaration covers M2: a

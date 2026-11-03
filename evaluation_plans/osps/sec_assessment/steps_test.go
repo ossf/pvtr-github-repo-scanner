@@ -36,8 +36,8 @@ func Test_HasDesignDocumentation(t *testing.T) {
 				GraphqlRepoData: buildGraphqlDataWithFiles([]string{DesignDocFiles[0], "README.md"}),
 				RestData:        &data.RestData{},
 			},
-			wantResult: gemara.Passed,
-			wantMsg:    "Design documentation found: " + DesignDocFiles[0],
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Design documentation found (" + DesignDocFiles[0] + "), but coverage of all actions and actors requires manual review",
 			wantConf:   gemara.Low,
 		},
 		{
@@ -46,8 +46,8 @@ func Test_HasDesignDocumentation(t *testing.T) {
 				GraphqlRepoData: buildGraphqlDataWithFiles([]string{strings.ToUpper(DesignDocFiles[1])}),
 				RestData:        &data.RestData{},
 			},
-			wantResult: gemara.Passed,
-			wantMsg:    "Design documentation found: " + strings.ToUpper(DesignDocFiles[1]),
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Design documentation found (" + strings.ToUpper(DesignDocFiles[1]) + "), but coverage of all actions and actors requires manual review",
 			wantConf:   gemara.Low,
 		},
 		{
@@ -168,8 +168,8 @@ func Test_HasDesignDocumentation(t *testing.T) {
 				}),
 				RestData: &data.RestData{},
 			},
-			wantResult: gemara.Passed,
-			wantMsg:    "Design documentation found: architecture.md",
+			wantResult: gemara.NeedsReview,
+			wantMsg:    "Design documentation found (architecture.md), but coverage of all actions and actors requires manual review",
 			wantConf:   gemara.Low,
 		},
 	}
