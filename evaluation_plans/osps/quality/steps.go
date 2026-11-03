@@ -234,10 +234,10 @@ func checkEvidenceDiagnostic(payload data.Payload) string {
 
 // requiredChecksResult turns a coverage comparison into a control result.
 // passMessage is the message when every check is covered without a gate.
-func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string) (gemara.Result, string, gemara.ConfidenceLevel) {
+func requiredChecksResult(coverage checkCoverage, passMessage string) (gemara.Result, string, gemara.ConfidenceLevel) {
 	var confidence gemara.ConfidenceLevel
 	if len(coverage.missing) > 0 {
-		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s%s", strings.Join(coverage.missing, ", "), failSuffix), confidence
+		return gemara.Failed, fmt.Sprintf("Some executed status checks are not mandatory but all should be: %s", strings.Join(coverage.missing, ", ")), confidence
 	}
 	if len(coverage.uncertain) > 0 {
 		return gemara.NeedsReview, fmt.Sprintf("Some executed status checks are not required by name and their workflow could not be inspected for a required gate job that covers them: %s. Manually review whether a required job gates them", strings.Join(coverage.uncertain, ", ")), gemara.Low
@@ -251,24 +251,32 @@ func requiredChecksResult(coverage checkCoverage, passMessage, failSuffix string
 	return gemara.Passed, passMessage, confidence
 }
 
-func StatusChecksAreRequiredByRulesets(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	// Branch rulesets are fetched once during payload load.
-	if !payload.RepositoryMetadata.HasBranchRules() {
-		if message := checkEvidenceDiagnostic(payload); message != "" {
-			return gemara.NeedsReview, message, gemara.Low
-		}
-		return gemara.Passed, "No rulesets found for default branch, continuing to evaluate branch protection", confidence
+// StatusChecksAreRequired compares executed checks against the union of the
+// requirements enforced by rulesets and classic branch protection. Evaluating
+// those sources as separate assessment steps makes each reject checks that are
+// already covered by the other, including dependencies of required gate jobs.
+func StatusChecksAreRequired(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
+	if payload.GraphqlRepoData == nil {
+		return gemara.NeedsReview, "Status check data is unavailable; manually review whether executed checks are mandatory", gemara.Low
 	}
 
-	coverage := uncoveredChecks(payload, payload.RepositoryMetadata.RequiredStatusCheckContexts())
-	return requiredChecksResult(coverage,
-		"No status checks were run that are not required by the rules",
-		" (NOTE: Not continuing to evaluate branch protection: combining requirements in rulesets and branch protection is not recommended)")
-}
+	// Copy before appending: steps share the payload's underlying slices.
+	required := append([]string(nil), payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts...)
+	metadata := payload.RepositoryMetadata
+	if metadata != nil {
+		required = append(required, metadata.RequiredStatusCheckContexts()...)
+	}
+	coverage := uncoveredChecks(payload, required)
 
-func StatusChecksAreRequiredByBranchProtection(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	coverage := uncoveredChecks(payload, payload.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts)
-	return requiredChecksResult(coverage, "No status checks were run that are not required by branch protection", "")
+	// Positive coverage is sufficient even with a read-only token. An unmatched
+	// check only proves a failure when both sources are observable, or when the
+	// public branch flag proves that no protection of either kind exists.
+	rulesetsObserved := metadata != nil && metadata.RulesetsObserved()
+	classicObserved := metadata != nil && metadata.ViewerCanAdminister() && !payload.GraphqlPartialData
+	if len(coverage.missing) > 0 && !data.ObservedUnprotected(metadata) && (!rulesetsObserved || !classicObserved) {
+		return gemara.NeedsReview, fmt.Sprintf("Some executed status checks could not be confirmed as mandatory: %s. Rulesets or classic branch protection could not be fully observed; manually review whether they require these checks", strings.Join(coverage.missing, ", ")), gemara.Low
+	}
+	return requiredChecksResult(coverage, "No status checks were run that are not required by rulesets or branch protection")
 }
 
 func NoBinariesInRepo(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {

@@ -20,6 +20,10 @@ type checkMetadata struct{ data.RepositoryMetadata }
 func (*checkMetadata) HasBranchRules() bool                  { return true }
 func (*checkMetadata) RequiredStatusCheckContexts() []string { return []string{"build"} }
 
+func (*checkMetadata) RulesetsObserved() bool            { return true }
+func (*checkMetadata) ViewerCanAdminister() bool         { return true }
+func (*checkMetadata) DefaultBranchProtectedFlag() *bool { return nil }
+
 type checkTransport func(*http.Request) (*http.Response, error)
 
 func (f checkTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -112,8 +116,7 @@ func TestCheckEvidenceClientCompatibility(t *testing.T) {
 						}
 					}
 					if control == "OSPS-QA-03.01" {
-						check(quality.StatusChecksAreRequiredByRulesets(p))
-						check(quality.StatusChecksAreRequiredByBranchProtection(p))
+						check(quality.StatusChecksAreRequired(p))
 					} else {
 						check(quality.HasOneOrMoreStatusChecks(p))
 					}

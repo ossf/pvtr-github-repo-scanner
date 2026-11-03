@@ -161,8 +161,7 @@ var (
 			quality.ReleasesHaveSBOM,
 		},
 		"OSPS-QA-03.01": {
-			quality.StatusChecksAreRequiredByRulesets,
-			quality.StatusChecksAreRequiredByBranchProtection,
+			quality.StatusChecksAreRequired,
 		},
 		"OSPS-QA-04.01": {
 			reusable_steps.IsCodeRepo,
