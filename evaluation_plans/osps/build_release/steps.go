@@ -496,26 +496,23 @@ func ReleaseHasUniqueIdentifier(payload data.Payload) (result gemara.Result, mes
 }
 
 // releaseAssetCompanionSuffixes identify companion files the shared
-// classifiers do not already cover: certificates and the bare .sbom suffix. A
-// companion is associated with the artifact it accompanies rather than
-// carrying the release identifier itself, so it is exempt from the
-// name-association expectation.
+// classifiers do not already cover: the bare .sbom suffix. A companion is
+// associated with the artifact it accompanies rather than carrying the release
+// identifier itself, so it is exempt from the name-association expectation.
 var releaseAssetCompanionSuffixes = []string{
-	".pem", ".sbom",
+	".sbom",
 }
 
 // releaseAssetCompanionNames are exact (lowercased) asset names that accompany
 // a release without identifying a specific artifact: standard documentation
-// files and the one manifest name the shared checksum classifier's markers do
-// not cover. Standalone license files are a separate, exported set below
+// files. Standalone license files are a separate, exported set below
 // (licenseAssetNames) so other controls can reuse the same exact-match
 // classification. This map matches exactly so a real artifact such as
-// readme-generator.zip is not exempted; note the shared checksum markers it
-// sits alongside are substring-matched, so a name like
+// readme-generator.zip is not exempted; note the shared checksum markers in
+// reusable_steps are substring-matched, so a name like
 // checksums-generator-1.0.zip is exempted through that path regardless.
 var releaseAssetCompanionNames = map[string]bool{
-	"md5sums": true,
-	"readme":  true, "readme.txt": true, "readme.md": true,
+	"readme": true, "readme.txt": true, "readme.md": true,
 }
 
 // licenseAssetNames are exact (lowercased) asset names recognized as
@@ -537,12 +534,12 @@ func IsLicenseAssetName(name string) bool {
 
 // isReleaseAssetCompanion reports whether a lowercased asset name is a
 // companion file rather than a release artifact in its own right. Signature,
-// attestation, and checksum recognition is delegated to the classifiers shared
-// with ReleasesAreSignedOrAttested, and SBOM extensions to the set shared with
-// the SBOM control, so no two controls disagree about the same asset; the
-// local lists add only what the shared classifiers do not cover.
+// attestation, certificate, and checksum recognition is delegated to the
+// classifiers in reusable_steps, and SBOM extensions to the set shared with the
+// SBOM control, so no two controls disagree about the same asset; the local
+// lists add only what the shared classifiers do not cover.
 func isReleaseAssetCompanion(lowerName string) bool {
-	if signatureAssetKind(lowerName) != "" || isHashManifest(lowerName) ||
+	if reusable_steps.IsSignatureOrChecksumAsset(lowerName) ||
 		reusable_steps.HasSBOMExtension(lowerName) {
 		return true
 	}
@@ -897,57 +894,6 @@ func EnsureLatestReleaseHasChangelog(payload data.Payload) (result gemara.Result
 	return gemara.NeedsReview, "The latest release description has no recognized changelog markers; manual review required", gemara.Low
 }
 
-// signatureAssetKinds maps each release-asset suffix to the artifact kind a
-// passing result should name. The suffixes mirror Scorecard's Signed-Releases
-// check (which BR-06 maps to), plus detached GPG signatures (.gpg/.pgp) that its
-// .asc-only list omits, and Helm provenance files (.prov): PGP clearsigned
-// documents that `helm package --sign` writes next to each chart archive. The
-// sets are disjoint, so match order is irrelevant.
-var signatureAssetKinds = []struct {
-	kind     string
-	suffixes []string
-}{
-	{"an in-toto/SLSA provenance attestation", []string{".intoto.jsonl"}},
-	{"a Sigstore bundle", []string{".sigstore", ".sigstore.json"}},
-	{"a cryptographic signature", []string{".sig", ".asc", ".sign", ".minisig", ".gpg", ".pgp"}},
-	{"a Helm provenance file", []string{".prov"}},
-}
-
-// A checksum manifest accounts for each asset's hash but does not prove it is
-// signed. Markers are matched as substrings because release tooling commonly
-// prefixes the project and version (e.g. "gh_2.96.0_checksums.txt").
-var (
-	hashManifestSuffixes = []string{".sha256", ".sha512", ".sha1", ".sha256sum", ".sha512sum", ".md5"}
-	hashManifestMarkers  = []string{"checksums", "sha256sums", "sha512sums"}
-)
-
-// signatureAssetKind returns the human-readable artifact kind for a release
-// asset that evidences signing, or "" if the name matches no known suffix.
-func signatureAssetKind(lowerName string) string {
-	for _, group := range signatureAssetKinds {
-		for _, suffix := range group.suffixes {
-			if strings.HasSuffix(lowerName, suffix) {
-				return group.kind
-			}
-		}
-	}
-	return ""
-}
-
-func isHashManifest(lowerName string) bool {
-	for _, suffix := range hashManifestSuffixes {
-		if strings.HasSuffix(lowerName, suffix) {
-			return true
-		}
-	}
-	for _, marker := range hashManifestMarkers {
-		if strings.Contains(lowerName, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // ReleasesAreSignedOrAttested evaluates whether released assets are signed, or
 // accounted for in a signed manifest. Evidence comes from a
 // self-declared SLSA attestation in Security Insights or the signature assets
@@ -978,10 +924,10 @@ func ReleasesAreSignedOrAttested(payload data.Payload) (result gemara.Result, me
 		for _, asset := range release.Assets {
 			totalAssets++
 			name := strings.ToLower(asset.Name)
-			if kind := signatureAssetKind(name); kind != "" {
+			if kind := reusable_steps.SignatureAssetKind(name); kind != "" {
 				return gemara.Passed, fmt.Sprintf("Release %q publishes %s (%s)", release.TagName, kind, asset.Name), gemara.Medium
 			}
-			if isHashManifest(name) {
+			if reusable_steps.IsHashManifest(name) {
 				sawHashManifest = true
 			}
 		}
