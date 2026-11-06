@@ -1,6 +1,7 @@
 package evaluation_plans
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -145,8 +146,14 @@ jobs:
 			graphql := &data.GraphqlRepoData{}
 			graphql.Repository.DefaultBranchRef.BranchProtectionRule.RequiredStatusCheckContexts = tt.classic
 			pr := appendRequiredCheckNode(&graphql.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes)
+			if err := json.Unmarshal([]byte(`{"StatusCheckRollup":{"Commit":{"CheckSuites":{"PageInfo":{"HasNextPage":false}}}}}`), pr); err != nil {
+				t.Fatal(err)
+			}
 			for _, name := range tt.runs {
 				suite := appendRequiredCheckNode(&pr.StatusCheckRollup.Commit.CheckSuites.Nodes)
+				if err := json.Unmarshal([]byte(`{"CheckRuns":{"PageInfo":{"HasNextPage":false}}}`), suite); err != nil {
+					t.Fatal(err)
+				}
 				if tt.gate && name != "DCO" {
 					suite.WorkflowRun.File.Path = workflowPath
 				}
