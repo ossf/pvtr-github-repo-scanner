@@ -1,11 +1,25 @@
 package docs
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/gemaraproj/go-gemara"
 	"github.com/ossf/pvtr-github-repo-scanner/data"
+	"github.com/ossf/pvtr-github-repo-scanner/evaluation_plans/reusable_steps"
+	sdkai "github.com/privateerproj/privateer-sdk/ai"
 )
+
+// newAIClientFromConfig is a seam for tests to stub the AI client.
+var newAIClientFromConfig = sdkai.NewClient
+
+// maxUserGuidesEvidenceBytes caps the documentation packet forwarded to the AI
+// provider. Files that do not fit are left out and the packet is marked
+// incomplete, so the model defers instead of failing on documents it never saw.
+const maxUserGuidesEvidenceBytes = 64 * 1024
+
+const userGuidesCollectionScope = "Text documentation (.md, .markdown, .rst, .adoc, .txt) in the repository root and the .github, doc, docs, and documentation directories. External sites and links within these files were not retrieved. Complete means every such file was read and supplied, not that the project's documentation is exhaustive or current."
 
 func HasSupportDocs(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
 	if payload.HasSupportMarkdown() {
@@ -16,12 +30,127 @@ func HasSupportDocs(payload data.Payload) (result gemara.Result, message string,
 	return gemara.Failed, "A support.md file or support statements in the readme.md was NOT found", confidence
 }
 
+// HasUserGuides assesses whether a project that has made a release documents
+// its basic functionality for users. A Security Insights detailed-guide
+// declaration passes outright. Otherwise the repository's conventional
+// documentation is graded by AI when configured, or left for manual review;
+// only an observed absence of any documentation fails, and documentation that
+// could not be read is never reported as a violation.
 func HasUserGuides(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
-	if payload.Insights.Project.Documentation.DetailedGuide == nil {
-		return gemara.Failed, "User guide was NOT specified in Security Insights data", confidence
+	released, observable := reusable_steps.HasPublishedRelease(payload)
+	if !observable {
+		return gemara.NeedsReview, "Release data is unavailable; manually review whether the documentation includes user guides for all basic functionality", gemara.Low
+	}
+	if !released {
+		return gemara.NotApplicable, "No published releases found; the user guide requirement does not apply", gemara.High
 	}
 
-	return gemara.Passed, "User guide was specified in Security Insights data", confidence
+	if guide := payload.Insights.Project.Documentation.DetailedGuide; guide != nil && strings.TrimSpace(string(*guide)) != "" {
+		return gemara.Passed, "User guide was specified in Security Insights data", gemara.High
+	}
+
+	files, docsErr := payload.GetDocumentationFiles()
+	if len(files) == 0 {
+		if docsErr != nil {
+			return gemara.NeedsReview, "No user guide declared in Security Insights, and repository documentation could not be inspected; manually review whether user guides exist", gemara.Low
+		}
+		return gemara.Failed, "No user guide declared in Security Insights, and no documentation was found in the repository root or the .github, doc, docs, or documentation directories", gemara.Medium
+	}
+
+	fallbackMessage := "No user guide declared in Security Insights; review the repository documentation (" + summarizeDocumentationPaths(files) + ") for user guides covering all basic functionality"
+	if payload.Config == nil {
+		return gemara.NeedsReview, fallbackMessage, gemara.Low
+	}
+	client, err := newAIClientFromConfig(*payload.Config)
+	if err != nil {
+		return reusable_steps.AIFallback(payload, "OSPS-DO-01.01", fallbackMessage, "AI client construction failed", err)
+	}
+	if client == nil {
+		// AI is not configured; leave the documentation for manual review.
+		return gemara.NeedsReview, fallbackMessage, gemara.Low
+	}
+
+	material, sources, err := userGuidesEvidence(files, docsErr == nil)
+	if err != nil {
+		return reusable_steps.AIFallback(payload, "OSPS-DO-01.01", fallbackMessage, "unable to assemble documentation evidence", err)
+	}
+	response, aiEvidence, err := reusable_steps.RunAIAssessment(client, "user-guides", material)
+	if err != nil {
+		return reusable_steps.AIFallback(payload, "OSPS-DO-01.01", fallbackMessage, "AI assessment failed", err)
+	}
+	if err := reusable_steps.ValidateAIResponse(response); err != nil {
+		return reusable_steps.AIFallback(payload, "OSPS-DO-01.01", fallbackMessage, "AI response did not conform to the expected verdict schema", err)
+	}
+
+	aiEvidence.Description = fmt.Sprintf("AI Assisted Review of %s", strings.Join(sources, ", "))
+	payload.AddEvidence(aiEvidence)
+	return response.GemaraResult(), response.Summary(), response.GemaraConfidence()
+}
+
+type userGuidesDocument struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type userGuidesAIEvidence struct {
+	Documentation []userGuidesDocument `json:"documentation"`
+	Collection    struct {
+		Complete bool   `json:"complete"`
+		Scope    string `json:"scope"`
+	} `json:"collection"`
+}
+
+// userGuidesEvidence packs documentation files, in discovery order (root
+// first), into a JSON packet within maxUserGuidesEvidenceBytes. A file that
+// does not fit is skipped rather than truncated and the packet is marked
+// incomplete, so a smaller later file can still be supplied.
+func userGuidesEvidence(files []data.DocumentationFile, complete bool) (material string, sources []string, err error) {
+	var packet userGuidesAIEvidence
+	packet.Collection.Complete = complete
+	packet.Collection.Scope = userGuidesCollectionScope
+	encoded, err := json.Marshal(packet)
+	if err != nil {
+		return "", nil, err
+	}
+	size := len(encoded)
+	for _, file := range files {
+		doc := userGuidesDocument{Path: file.Path, Content: file.Content}
+		docJSON, err := json.Marshal(doc)
+		if err != nil {
+			return "", nil, err
+		}
+		// +1 for the separating comma between array elements.
+		if size+len(docJSON)+1 > maxUserGuidesEvidenceBytes {
+			packet.Collection.Complete = false
+			continue
+		}
+		size += len(docJSON) + 1
+		packet.Documentation = append(packet.Documentation, doc)
+		sources = append(sources, "/"+file.Path)
+	}
+	if len(packet.Documentation) == 0 {
+		return "", nil, fmt.Errorf("every documentation file exceeds the %d-byte limit for reliable AI assessment", maxUserGuidesEvidenceBytes)
+	}
+	encoded, err = json.Marshal(packet)
+	if err != nil {
+		return "", nil, err
+	}
+	return string(encoded), sources, nil
+}
+
+// summarizeDocumentationPaths names the first few documentation files for a
+// review message.
+func summarizeDocumentationPaths(files []data.DocumentationFile) string {
+	const shown = 5
+	var paths []string
+	for i, file := range files {
+		if i == shown {
+			paths = append(paths, fmt.Sprintf("and %d more", len(files)-shown))
+			break
+		}
+		paths = append(paths, file.Path)
+	}
+	return strings.Join(paths, ", ")
 }
 
 func AcceptsVulnReports(payload data.Payload) (result gemara.Result, message string, confidence gemara.ConfidenceLevel) {
