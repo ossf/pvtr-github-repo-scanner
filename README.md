@@ -1,6 +1,6 @@
 # Privateer Plugin for GitHub Repositories
 
-This application performs automated assessments against GitHub repositories using controls defined in the [Open Source Project Security Baseline](https://baseline.openssf.org). The application consumes the OSPS Baseline controls using [Gemara](https://github.com/gemaraproj/go-gemara) layer 2 and produces results of the automated assessments using layer 4.
+This application performs automated assessments against GitHub repositories using controls defined in the [Open Source Project Security Baseline](https://baseline.openssf.org). It reads the OSPS Baseline controls as a [Gemara](https://gemara.openssf.org) Layer 2 catalog and writes its results as Layer 5 evaluation logs.
 
 Many of the assessments depend upon the presence of a [Security Insights](https://github.com/ossf/security-insights) file at the root of the repository, or `./github/security-insights.yml`.
 
