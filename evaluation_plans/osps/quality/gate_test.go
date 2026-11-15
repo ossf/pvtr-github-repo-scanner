@@ -293,6 +293,26 @@ jobs:
 			gate: "    runs-on: ubuntu-latest\n    steps:\n      - uses: re-actors/alls-green@release/v1\n        with:\n          jobs: ${{ toJSON(needs) }}\n",
 			want: gemara.Passed,
 		},
+		{
+			name: "a gate whose step reads needs through env counts",
+			gate: "    runs-on: ubuntu-latest\n    steps:\n      - env:\n          LINT_RESULT: ${{ needs.lint.result }}\n        run: test \"$LINT_RESULT\" = success\n",
+			want: gemara.Passed,
+		},
+		{
+			name: "a gate whose job env reads needs counts",
+			gate: "    runs-on: ubuntu-latest\n    env:\n      RESULTS: ${{ toJSON(needs.*.result) }}\n    steps:\n      - run: echo \"$RESULTS\" | grep -qv failure\n",
+			want: gemara.Passed,
+		},
+		{
+			name: "a gate whose step env is a needs expression counts",
+			gate: "    runs-on: ubuntu-latest\n    steps:\n      - env: ${{ fromJSON(needs.lint.outputs.env) }}\n        run: test \"$LINT_RESULT\" = success\n",
+			want: gemara.Passed,
+		},
+		{
+			name: "a gate whose env does not read needs cannot fail",
+			gate: "    runs-on: ubuntu-latest\n    env:\n      MODE: strict\n    steps:\n      - env:\n          LEVEL: high\n        run: echo \"$MODE $LEVEL\"\n",
+			want: gemara.Failed,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

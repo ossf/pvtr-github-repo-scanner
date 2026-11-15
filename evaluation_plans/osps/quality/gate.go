@@ -235,19 +235,37 @@ func jobProducesCheck(job *actionlint.Job, checkName string) bool {
 }
 
 // failsOnNeeds reports whether the job can go red because of its dependencies:
-// it must not ignore errors, and a step must read the `needs` context. A step
-// that reads `needs` only in its condition still passes the check, so this is
-// a heuristic that rejects the clear cases such as a gate that only echoes.
+// it must not ignore errors, and a step must read the `needs` context, either
+// directly or through an `env` value of the step or the job. A step that reads
+// `needs` only in its condition still passes the check, so this is a heuristic
+// that rejects the clear cases such as a gate that only echoes.
 func failsOnNeeds(job *actionlint.Job) bool {
 	if job.ContinueOnError != nil && (job.ContinueOnError.Expression != nil || job.ContinueOnError.Value) {
 		return false
 	}
 	reads := func(s *actionlint.String) bool { return s != nil && strings.Contains(s.Value, "needs") }
+	readsEnv := func(env *actionlint.Env) bool {
+		if env == nil {
+			return false
+		}
+		if reads(env.Expression) {
+			return true
+		}
+		for _, v := range env.Vars {
+			if v != nil && reads(v.Value) {
+				return true
+			}
+		}
+		return false
+	}
+	if readsEnv(job.Env) {
+		return true
+	}
 	for _, step := range job.Steps {
 		if step == nil {
 			continue
 		}
-		if reads(step.If) {
+		if reads(step.If) || readsEnv(step.Env) {
 			return true
 		}
 		switch exec := step.Exec.(type) {
