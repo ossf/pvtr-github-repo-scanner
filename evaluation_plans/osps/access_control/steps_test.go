@@ -25,6 +25,7 @@ type FakeBranchRuleMetadata struct {
 	data.RepositoryMetadata
 	defaultBranchProtected *bool
 	requiresPRReviews      *bool
+	requiresPullRequest    *bool
 	protectedFromDeletion  *bool
 	rulesetsObserved       bool
 	viewerCanAdminister    bool
@@ -37,6 +38,10 @@ func (f *FakeBranchRuleMetadata) IsDefaultBranchProtected() *bool {
 
 func (f *FakeBranchRuleMetadata) DefaultBranchRequiresPRReviews() *bool {
 	return f.requiresPRReviews
+}
+
+func (f *FakeBranchRuleMetadata) DefaultBranchRequiresPullRequest() *bool {
+	return f.requiresPullRequest
 }
 
 func (f *FakeBranchRuleMetadata) IsDefaultBranchProtectedFromDeletion() *bool {
@@ -207,6 +212,22 @@ func Test_BranchProtectionRestrictsPushes(t *testing.T) {
 			},
 			wantResult:  gemara.Passed,
 			wantMessage: "Branch rule requires approving reviews",
+		},
+		{
+			name: "ruleset requires a pull request with no approvals, admin token",
+			payload: data.Payload{
+				GraphqlRepoData: &data.GraphqlRepoData{},
+				RepositoryMetadata: &FakeBranchRuleMetadata{
+					defaultBranchProtected: &falseVal,
+					requiresPRReviews:      &falseVal,
+					requiresPullRequest:    &trueVal,
+					rulesetsObserved:       true,
+					viewerCanAdminister:    true,
+					protectedFlag:          &trueVal,
+				},
+			},
+			wantResult:  gemara.Passed,
+			wantMessage: "Branch rule requires a pull request before merging",
 		},
 		{
 			name: "observed unprotected: rulesets visible and empty, admin token",

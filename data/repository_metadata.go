@@ -15,6 +15,7 @@ type RepositoryMetadata interface {
 	OrganizationBlogURL() *string
 	IsDefaultBranchProtected() *bool
 	DefaultBranchRequiresPRReviews() *bool
+	DefaultBranchRequiresPullRequest() *bool
 	IsDefaultBranchProtectedFromDeletion() *bool
 	HasBranchRules() bool
 	RequiredStatusCheckContexts() []string
@@ -81,6 +82,25 @@ func (r *GitHubRepositoryMetadata) DefaultBranchRequiresPRReviews() *bool {
 	}
 	requiresReviews := r.defaultBranchRules != nil && r.defaultBranchRules.PullRequest != nil && len(r.defaultBranchRules.PullRequest) > 0 && r.defaultBranchRules.PullRequest[0].Parameters.RequiredApprovingReviewCount > 0
 	return &requiresReviews
+}
+
+// DefaultBranchRequiresPullRequest reports whether a ruleset on the default
+// branch carries a pull_request rule. Such a rule rejects direct pushes
+// whatever its required approval count, so it restricts pushes even when
+// DefaultBranchRequiresPRReviews is false. It returns nil when the rulesets
+// were not observed.
+func (r *GitHubRepositoryMetadata) DefaultBranchRequiresPullRequest() *bool {
+	if r.defaultBranchRules == nil {
+		return nil
+	}
+	requiresPullRequest := false
+	for _, rule := range r.defaultBranchRules.PullRequest {
+		if rule != nil {
+			requiresPullRequest = true
+			break
+		}
+	}
+	return &requiresPullRequest
 }
 
 // HasBranchRules reports whether any ruleset at all applies to the default

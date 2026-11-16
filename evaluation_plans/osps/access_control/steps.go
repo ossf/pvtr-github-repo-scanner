@@ -62,6 +62,12 @@ func BranchProtectionRestrictsPushes(payload data.Payload) (result gemara.Result
 		result = gemara.Passed
 		message = "Branch rule requires approving reviews"
 		confidence = gemara.High
+	// A pull_request rule blocks direct pushes even with zero required
+	// approvals; the approval count is a review question for OSPS-QA-07.01.
+	case isTrue(metadata.DefaultBranchRequiresPullRequest()):
+		result = gemara.Passed
+		message = "Branch rule requires a pull request before merging"
+		confidence = gemara.High
 	// The branch `protected` flag is readable by any token, and false means no
 	// classic branch protection and no rulesets exist — a trustworthy negative
 	// even without admin. It has to precede the RulesetsObserved case below:
