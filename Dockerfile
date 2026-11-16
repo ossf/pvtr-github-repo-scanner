@@ -2,7 +2,7 @@ FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c03
 RUN apk add --no-cache wget tar unzip
 
 WORKDIR /app
-ARG VERSION=0.24.1
+ARG VERSION=0.24.3
 ARG PLATFORM=Linux_x86_64  # Change this based on your target system
 
 RUN wget https://github.com/privateerproj/pvtr/releases/download/v${VERSION}/pvtr_${PLATFORM}.tar.gz
