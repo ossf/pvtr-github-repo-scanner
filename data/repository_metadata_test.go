@@ -151,6 +151,60 @@ func TestRulesetsObserved(t *testing.T) {
 	}
 }
 
+func TestDefaultBranchRequiresPullRequest(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	testCases := []struct {
+		name            string
+		rules           *github.BranchRules
+		expected        *bool
+		expectedReviews *bool
+	}{
+		{
+			name:            "ruleset fetch failed",
+			rules:           nil,
+			expected:        nil,
+			expectedReviews: nil,
+		},
+		{
+			name: "rulesets fetched without a pull_request rule",
+			rules: &github.BranchRules{
+				Deletion: []*github.BranchRuleMetadata{{RulesetID: 1}},
+			},
+			expected:        &falseVal,
+			expectedReviews: &falseVal,
+		},
+		{
+			name: "pull_request rule with no required approvals",
+			rules: &github.BranchRules{
+				Deletion:    []*github.BranchRuleMetadata{{RulesetID: 1}},
+				PullRequest: []*github.PullRequestBranchRule{{}},
+			},
+			expected:        &trueVal,
+			expectedReviews: &falseVal,
+		},
+		{
+			name: "pull_request rule with required approvals",
+			rules: &github.BranchRules{
+				PullRequest: []*github.PullRequestBranchRule{{
+					Parameters: github.PullRequestRuleParameters{RequiredApprovingReviewCount: 1},
+				}},
+			},
+			expected:        &trueVal,
+			expectedReviews: &trueVal,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			metadata := &GitHubRepositoryMetadata{defaultBranchRules: testCase.rules}
+			assert.Equal(t, testCase.expected, metadata.DefaultBranchRequiresPullRequest())
+			assert.Equal(t, testCase.expectedReviews, metadata.DefaultBranchRequiresPRReviews())
+		})
+	}
+}
+
 func TestObservedUnprotected(t *testing.T) {
 	trueVal := true
 	falseVal := false
