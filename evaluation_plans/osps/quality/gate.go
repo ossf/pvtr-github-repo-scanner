@@ -17,10 +17,12 @@ type executedCheck struct {
 // checkCoverage is the outcome of comparing executed checks to the required
 // ones. missing checks are definitely not covered. uncertain checks belong to a
 // workflow that could not be inspected, so a gate there cannot be ruled out.
+// incompleteEvidence prevents a pass, but does not invalidate a visible miss.
 type checkCoverage struct {
-	missing   []string
-	uncertain []string
-	gates     []string
+	incompleteEvidence string
+	missing            []string
+	uncertain          []string
+	gates              []string
 }
 
 // executedStatusChecks returns the check runs on the default branch's last
@@ -32,6 +34,11 @@ type checkCoverage struct {
 func executedStatusChecks(payload data.Payload) []executedCheck {
 	var statusChecks []executedCheck
 	for _, check := range payload.Repository.DefaultBranchRef.Target.Commit.AssociatedPullRequests.Nodes {
+		// Compatibility with the previous nullable-parent behavior, not proof
+		// that a null rollup contains no checks.
+		if check.StatusCheckRollup == nil {
+			continue
+		}
 		for _, run := range check.StatusCheckRollup.Commit.CheckSuites.Nodes {
 			for _, checkRun := range run.CheckRuns.Nodes {
 				switch checkRun.Conclusion {
@@ -64,7 +71,7 @@ func uncoveredChecks(payload data.Payload, required []string) checkCoverage {
 		}
 	}
 
-	var coverage checkCoverage
+	coverage := checkCoverage{incompleteEvidence: checkEvidenceDiagnostic(payload)}
 	if len(unmatched) == 0 {
 		return coverage
 	}
