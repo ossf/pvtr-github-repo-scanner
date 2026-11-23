@@ -55,6 +55,7 @@ var aiAssistedBehaviorRequirements = map[string]string{
 	"test-execution-documentation":              "OSPS-QA-06.02",
 	"test-maintenance-policy":                   "OSPS-QA-06.03",
 	"threat-modeling-coverage":                  "OSPS-SA-03.02",
+	"user-guides":                               "OSPS-DO-01.01",
 	"workflow-job-permissions":                  "OSPS-AC-04.02",
 }
 
