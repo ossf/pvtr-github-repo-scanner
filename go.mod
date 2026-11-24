@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.16
-	github.com/gemaraproj/go-gemara v0.12.0
+	github.com/gemaraproj/go-gemara v0.13.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/go-github/v74 v74.0.0
 	github.com/migueleliasweb/go-github-mock v1.5.0
@@ -28,7 +28,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.20.0 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
-	github.com/defenseunicorns/go-oscal v0.7.1 // indirect
+	github.com/defenseunicorns/go-oscal v0.7.2 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
@@ -118,7 +118,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260727163830-6c54dddc4772 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
-	oras.land/oras-go/v2 v2.6.3 // indirect
+	oras.land/oras-go/v2 v2.7.0 // indirect
 )
 
 require (
