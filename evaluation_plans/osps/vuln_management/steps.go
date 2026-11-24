@@ -896,8 +896,8 @@ type scaIdentifier struct {
 // dependencies.
 var scaActionIdentifiers = []scaIdentifier{
 	{"actions/dependency-review-action", "dependency-review", true, true},
-	{"google/osv-scanner-action", "osv-scanner", true, false},
-	{"google/osv-scanner-action/osv-scanner-action", "osv-scanner", true, false},
+	{"google/osv-scanner-action", "osv-scanner", true, true},
+	{"google/osv-scanner-action/osv-scanner-action", "osv-scanner", true, true},
 	{"aquasecurity/trivy-action", "trivy", true, false},
 	{"anchore/scan-action", "grype", true, false},
 	{"snyk/actions/node", "snyk", true, false},
@@ -908,7 +908,7 @@ var scaActionIdentifiers = []scaIdentifier{
 }
 
 var scaCommandIdentifiers = []scaIdentifier{
-	{"osv-scanner", "osv-scanner", true, false},
+	{"osv-scanner", "osv-scanner", true, true},
 	{"trivy", "trivy", true, false},
 	{"grype", "grype", true, false},
 	{"snyk", "snyk", true, false},
