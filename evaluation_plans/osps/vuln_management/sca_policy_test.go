@@ -673,3 +673,16 @@ func TestHasVersionTagFilter(t *testing.T) {
 func filterWith(value string) *actionlint.WebhookEventFilter {
 	return &actionlint.WebhookEventFilter{Values: []*actionlint.String{{Value: value}}}
 }
+
+func TestScaToolCapabilitiesOSVScannerCoversMalicious(t *testing.T) {
+	// OSV-Scanner matches against OSV.dev, which includes the OpenSSF
+	// malicious-packages (MAL-) records, so it covers both kinds of finding.
+	vulnerabilities, malicious := scaToolCapabilities("osv-scanner")
+	assert.True(t, vulnerabilities)
+	assert.True(t, malicious)
+
+	// A vulnerability-only scanner is still not treated as covering malicious packages.
+	vulnerabilities, malicious = scaToolCapabilities("npm-audit")
+	assert.True(t, vulnerabilities)
+	assert.False(t, malicious)
+}
